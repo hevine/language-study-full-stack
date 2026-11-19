@@ -1,0 +1,698 @@
+import type {
+  ActivePlanResponse,
+  AttemptSummary,
+  Catalog,
+  Day,
+  DayResponse,
+  EdgeTtsStatus,
+  GradeResponse,
+  LearningPath,
+  Plan,
+  PracticeAttempt,
+  PracticeBriefResponse,
+  PracticeOverview,
+  PracticeStats,
+  MaterialSummary,
+  MaterialsResponse,
+  MaterialUploadResponse,
+  SettingsResponse,
+  Stats,
+  ExamCalendar,
+  ExamSessionsResponse,
+  LexiconResponse,
+  LlmPoolKey,
+  AiGenerateResponse,
+  AiStats,
+  TaskDetailResponse,
+  VocabWord,
+  VoiceAssignmentMap,
+  VoiceCandidate,
+  VoiceDiscoverResponse,
+  VoiceDraft,
+  VoicePrefs,
+  VoicesResponse,
+  AuthConfig,
+  AuthSession,
+  AuthUser,
+  QrPollResponse,
+  QrStartResponse,
+  TokenResponse,
+  AuthProviderId,
+} from './types';
+
+const BASE = '/api';
+
+/** 登录态丢失（刷新令牌也失效）时广播，由 AuthProvider 统一跳转到登录页 */
+export const AUTH_LOST_EVENT = 'wb:auth-lost';
+
+/** access token 只存在内存里：刷新页面靠 HttpOnly Cookie 静默换回，绝不写入 localStorage */
+let accessToken: string | null = null;
+export function setAccessToken(token: string | null): void {
+  accessToken = token;
+}
+export function getAccessToken(): string | null {
+  return accessToken;
+}
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly details?: unknown;
+
+  constructor(message: string, status: number, code: string, details?: unknown) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** 并发刷新合并为一次请求，避免 401 风暴把限流打满 */
+let refreshInFlight: Promise<TokenResponse | null> | null = null;
+
+export function refreshSilently(): Promise<TokenResponse | null> {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    try {
+      const response = await fetch(`${BASE}/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+      });
+      if (!response.ok) return null;
+      const data = (await response.json()) as TokenResponse;
+      accessToken = data.accessToken;
+      return data;
+    } catch {
+      return null;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
+}
+
+async function rawRequest<T>(path: string, init: RequestInit = {}, retries = 2): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const response = await fetch(`${BASE}${path}`, {
+        ...init,
+        credentials: 'include',
+        headers: {
+          ...(init.body ? { 'content-type': 'application/json' } : {}),
+          ...(init.headers ?? {}),
+          ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+        },
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: { code?: string; message?: string; details?: unknown } }
+          | null;
+        const message = payload?.error?.message ?? `请求失败（${response.status}）`;
+        const code = payload?.error?.code ?? 'UNKNOWN';
+        const error = new ApiError(message, response.status, code, payload?.error?.details);
+        // 4xx 不重试，5xx 最多再试 retries 次
+        if (response.status >= 500 && attempt < retries) {
+          lastError = error;
+          await sleep(400 * 2 ** attempt);
+          continue;
+        }
+        throw error;
+      }
+
+      if (response.status === 204) return undefined as T;
+      return (await response.json()) as T;
+    } catch (err) {
+      if (err instanceof ApiError) throw err;
+      lastError = err;
+      if (attempt < retries) {
+        await sleep(400 * 2 ** attempt);
+        continue;
+      }
+      throw new ApiError('无法连接本地服务，请确认后端已启动', 0, 'NETWORK_ERROR');
+    }
+  }
+
+  throw lastError instanceof ApiError
+    ? lastError
+    : new ApiError('请求失败', 0, 'UNKNOWN');
+}
+
+/** 文件上传 / 音频合成等不走 request() 的请求，也要带令牌并在 401 时刷新一次 */
+async function fetchWithAuth(url: string, init: RequestInit): Promise<Response> {
+  const build = (): RequestInit => ({
+    ...init,
+    credentials: 'include',
+    headers: {
+      ...((init.headers as Record<string, string> | undefined) ?? {}),
+      ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+    },
+  });
+  let response = await fetch(url, build());
+  if (response.status === 401) {
+    const refreshed = await refreshSilently();
+    if (refreshed) response = await fetch(url, build());
+    else {
+      setAccessToken(null);
+      window.dispatchEvent(new Event(AUTH_LOST_EVENT));
+    }
+  }
+  return response;
+}
+
+/** 401 自动刷新一次并重试；刷新也失败才广播登录态丢失 */
+async function request<T>(path: string, init: RequestInit = {}, retries = 2): Promise<T> {
+  try {
+    return await rawRequest<T>(path, init, retries);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401 && !path.startsWith('/auth/')) {
+      const refreshed = await refreshSilently();
+      if (refreshed) return rawRequest<T>(path, init, retries);
+      setAccessToken(null);
+      window.dispatchEvent(new Event(AUTH_LOST_EVENT));
+    }
+    throw err;
+  }
+}
+
+export const api = {
+  // ---- 用户与鉴权 ----
+  authConfig: () => request<AuthConfig>('/auth/config', {}, 0),
+
+  authLogin: (username: string, password: string) =>
+    request<TokenResponse>(
+      '/auth/login',
+      { method: 'POST', body: JSON.stringify({ username, password }) },
+      0,
+    ),
+
+  authLogout: () =>
+    request<{ ok: boolean }>('/auth/logout', { method: 'POST', body: '{}' }, 0),
+
+  authMe: () => request<{ user: AuthUser }>('/auth/me', {}, 0),
+
+  authQrStart: (provider: AuthProviderId, bind = false) =>
+    request<QrStartResponse>(
+      '/auth/qr/start',
+      { method: 'POST', body: JSON.stringify({ provider, bind }) },
+      0,
+    ),
+
+  authQrPoll: (ticketId: string, secret: string) =>
+    request<QrPollResponse>(
+      `/auth/qr/${encodeURIComponent(ticketId)}`,
+      { headers: { 'x-ticket-secret': secret } },
+      0,
+    ),
+
+  authQrExchange: (ticketId: string, ticketSecret: string) =>
+    request<TokenResponse>(
+      '/auth/qr/exchange',
+      { method: 'POST', body: JSON.stringify({ ticketId, ticketSecret }) },
+      0,
+    ),
+
+  authSessions: () => request<{ sessions: AuthSession[] }>('/auth/sessions', {}, 0),
+
+  authRevokeSession: (id: string) =>
+    request<{ ok: boolean }>(`/auth/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }, 0),
+
+  authAdminUsers: () =>
+    request<{ users: Array<AuthUser & { sessionCount: number }>; total: number }>(
+      '/auth/admin/users',
+      {},
+      0,
+    ),
+
+  authAdminCreateUser: (input: {
+    username: string;
+    password: string;
+    displayName?: string;
+    role?: 'admin' | 'user';
+  }) =>
+    request<{ user: AuthUser }>(
+      '/auth/admin/users',
+      { method: 'POST', body: JSON.stringify(input) },
+      0,
+    ),
+
+  authAdminPatchUser: (
+    id: string,
+    patch: { role?: 'admin' | 'user'; status?: 'active' | 'pending' | 'disabled'; displayName?: string },
+  ) =>
+    request<{ user: AuthUser }>(
+      `/auth/admin/users/${encodeURIComponent(id)}`,
+      { method: 'PATCH', body: JSON.stringify(patch) },
+      0,
+    ),
+
+  catalog: () => request<Catalog>('/catalog'),
+
+  activePlan: () => request<ActivePlanResponse>('/plans/active'),
+
+  createPlan: (input: {
+    language: string;
+    examId: string;
+    currentLevelId: string;
+    targetScore: number;
+    startDate: string;
+    examDate: string;
+    hoursPerWeek: number;
+    dailyMinutes: number;
+  }) => request<{ plan: Plan }>('/plans', { method: 'POST', body: JSON.stringify(input) }, 0),
+
+  archivePlan: (id: string) => request<{ ok: boolean }>(`/plans/${id}/archive`, { method: 'POST' }),
+
+  plans: () => request<{ plans: Plan[] }>('/plans'),
+
+  activatePlan: (id: string) =>
+    request<{ plan: Plan }>(`/plans/${id}/activate`, { method: 'POST' }, 0),
+
+  learningPath: (language: string) =>
+    request<LearningPath>(`/paths/${language}`, {}, 1),
+
+  day: (date: string) => request<DayResponse>(`/days/${date}`, {}, 1),
+
+  dayBrief: (date: string) => request<DayResponse>(`/days/${date}?brief=1`, {}, 1),
+
+  toggleTask: (date: string, taskId: string, done: boolean, minutes?: number) =>
+    request<{ day: Day }>(`/days/${date}/tasks/${taskId}`, {
+      method: 'POST',
+      body: JSON.stringify(minutes ? { done, minutes } : { done }),
+    }),
+
+  taskDetail: (date: string, taskId: string) =>
+    request<TaskDetailResponse>(`/tasks/${date}/${taskId}`, {}, 1),
+
+  resetDay: (date: string) => request<{ day: Day }>(`/days/${date}/reset`, { method: 'POST' }),
+
+  /** 统计按语种隔离：不传则跟随服务端当前激活计划 */
+  stats: (language?: string) =>
+    request<Stats>(`/stats${language ? `?language=${language}` : ''}`),
+
+  vocabDue: (language?: string, limit = 30) =>
+    request<{ words: VocabWord[] }>(
+      `/vocab/due?limit=${limit}${language ? `&language=${language}` : ''}`,
+    ),
+
+  vocab: (language?: string, q?: string, level?: string) =>
+    request<{ words: VocabWord[]; stats: { total: number; due: number; mastered: number } }>(
+      `/vocab?limit=300${language ? `&language=${language}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}${level ? `&level=${encodeURIComponent(level)}` : ''}`,
+    ),
+
+  review: (id: string, grade: number, language?: string) =>
+    request<{ next: { intervalDays: number; dueDate: string } }>(`/vocab/${id}/review`, {
+      method: 'POST',
+      body: JSON.stringify(language ? { grade, language } : { grade }),
+    }),
+
+  /** 报考日历：报名 / 选考场 / 准考证 / 费用 */
+  examCalendar: (examId: string, examDate: string) =>
+    request<ExamCalendar>(`/exam-calendar?examId=${examId}&examDate=${examDate}`),
+
+  planCalendar: (planId: string) =>
+    request<ExamCalendar>(`/exam-calendar/plan/${planId}`),
+
+  /** 真实考试场次：选「哪一年哪一月的那一场」 */
+  examSessions: (examId: string, years = 3) =>
+    request<ExamSessionsResponse>(`/exam-sessions?examId=${examId}&years=${years}`),
+
+  /** 分级词库：每个级别的收录量、已进词汇本数量、词条列表 */
+  lexicon: (language: string, level?: string, q?: string) =>
+    request<LexiconResponse>(
+      `/lexicon?language=${language}${level ? `&level=${encodeURIComponent(level)}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}`,
+    ),
+
+  importLevel: (language: string, level: string) =>
+    request<{ added: number; skipped: number; stats: { total: number; due: number; mastered: number } }>(
+      '/lexicon/import',
+      { method: 'POST', body: JSON.stringify({ language, level }) },
+    ),
+
+  /** 「换一篇」：清掉当日缓存材料，强制让大模型按当日考纲重新生成 */
+  regenerateDay: (date: string) =>
+    request<{ source: string; notice: string | null; titles: Array<{ kind: string; title: string }> }>(
+      `/tasks/${date}/regenerate`,
+      { method: 'POST' },
+      0,
+    ),
+
+  materials: (language: string) => request<MaterialsResponse>(`/materials?language=${language}`),
+
+  materialDetail: (id: string) =>
+    request<{
+      material: MaterialSummary;
+      units: Array<{ idx: number; title: string; charCount: number; pageFrom: number | null; pageTo: number | null }>;
+    }>(`/materials/${id}`),
+
+  /** 上传本地电子书：直接以文件字节作为请求体，文件名走 query，避免引入 multipart */
+  uploadMaterial: async (
+    file: File,
+    language: string,
+    options: { title?: string; level?: string; kind?: string } = {},
+  ): Promise<MaterialUploadResponse> => {
+    const query = new URLSearchParams({
+      language,
+      name: file.name,
+      ...(options.title ? { title: options.title } : {}),
+      ...(options.level ? { level: options.level } : {}),
+      ...(options.kind ? { kind: options.kind } : {}),
+    });
+    const response = await fetchWithAuth(`${BASE}/materials?${query.toString()}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: file,
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: { message?: string; code?: string } }
+        | null;
+      throw new ApiError(
+        payload?.error?.message ?? `导入失败（${response.status}）`,
+        response.status,
+        payload?.error?.code ?? 'UPLOAD_FAILED',
+      );
+    }
+    return (await response.json()) as MaterialUploadResponse;
+  },
+
+  activateMaterial: (id: string, active: boolean) =>
+    request<{ ok: boolean; active: boolean }>(
+      `/materials/${id}/activate`,
+      { method: 'POST', body: JSON.stringify({ active }) },
+      0,
+    ),
+
+  deleteMaterial: (id: string) => request<{ ok: boolean }>(`/materials/${id}`, { method: 'DELETE' }, 0),
+
+  enrichMaterial: (id: string) =>
+    request<{ ok: boolean; updated: number; message: string }>(
+      `/materials/${id}/enrich`,
+      { method: 'POST', body: JSON.stringify({ limit: 40 }) },
+      0,
+    ),
+
+  settings: () => request<SettingsResponse>('/settings'),
+
+  saveSettings: (input: {
+    baseUrl?: string;
+    model?: string;
+    apiKey?: string;
+    providerId?: string;
+    displayName?: string;
+    goalNote?: string;
+  }) => request<SettingsResponse>('/settings', { method: 'PUT', body: JSON.stringify(input) }, 0),
+
+  testLlm: (input: { keyId?: string; baseUrl?: string; model?: string; apiKey?: string; providerId?: string }) =>
+    request<{ ok: boolean; latencyMs: number; message: string; status?: number; snippet?: string }>(
+      '/settings/test',
+      { method: 'POST', body: JSON.stringify(input) },
+      0,
+    ),
+
+  /** 号池：一条线路 = 一个平台 + 一把 Key + 一个模型 */
+  addKey: (input: {
+    providerId?: string;
+    label?: string;
+    baseUrl: string;
+    model: string;
+    apiKey: string;
+    persist?: boolean;
+    enabled?: boolean;
+  }) => request<{ key: LlmPoolKey; llm: SettingsResponse['llm'] }>(
+    '/settings/keys',
+    { method: 'POST', body: JSON.stringify(input) },
+    0,
+  ),
+
+  updateKey: (
+    id: string,
+    patch: {
+      providerId?: string;
+      label?: string;
+      baseUrl?: string;
+      model?: string;
+      apiKey?: string;
+      persist?: boolean;
+      enabled?: boolean;
+    },
+  ) => request<{ key: LlmPoolKey; llm: SettingsResponse['llm'] }>(
+    `/settings/keys/${encodeURIComponent(id)}`,
+    { method: 'PUT', body: JSON.stringify(patch) },
+    0,
+  ),
+
+  deleteKey: (id: string) =>
+    request<{ ok: boolean; llm: SettingsResponse['llm'] }>(
+      `/settings/keys/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+      0,
+    ),
+
+  resetKey: (id: string) =>
+    request<{ ok: boolean; llm: SettingsResponse['llm'] }>(
+      `/settings/keys/${encodeURIComponent(id)}/reset`,
+      { method: 'POST' },
+      0,
+    ),
+
+  reorderKeys: (ids: string[]) =>
+    request<{ ok: boolean; llm: SettingsResponse['llm'] }>(
+      '/settings/keys/order',
+      { method: 'PUT', body: JSON.stringify({ ids }) },
+      0,
+    ),
+
+  testKey: (id: string) =>
+    request<{ ok: boolean; latencyMs: number; message: string; status?: number; snippet?: string }>(
+      `/settings/keys/${encodeURIComponent(id)}/test`,
+      { method: 'POST' },
+      0,
+    ),
+
+  /** 拉取该平台真实可用的模型 ID（魔搭的模型名是 Qwen/Qwen3-8B 这种，手填容易错） */
+  llmModels: (input: { keyId?: string; baseUrl?: string; apiKey?: string; providerId?: string }) =>
+    request<{ models: string[]; count: number }>(
+      '/settings/models',
+      { method: 'POST', body: JSON.stringify(input) },
+      0,
+    ),
+
+  practiceOverview: () => request<PracticeOverview>('/practice/overview', {}, 1),
+
+  practice: (date: string, taskId: string) =>
+    request<PracticeBriefResponse>(`/practice/${date}/${taskId}`, {}, 1),
+
+  gradePractice: (
+    date: string,
+    taskId: string,
+    body: {
+      text: string;
+      durationSeconds?: number | null;
+      submissionSource?: 'typed' | 'speech';
+      recognitionConfidence?: number | null;
+    },
+  ) =>
+    request<GradeResponse>(`/practice/${date}/${taskId}/grade`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, 0),
+
+  practiceAttempts: (limit = 30, language?: string) =>
+    request<{ attempts: AttemptSummary[]; summary: PracticeStats }>(
+      `/practice/attempts?limit=${limit}${language ? `&language=${language}` : ''}`,
+    ),
+
+  attempt: (id: string) => request<{ attempt: PracticeAttempt }>(`/practice/attempts/${id}`),
+
+  /**
+   * AI 加练：由用户手动触发，按语种 + 任务类型 + 级别 + 今日主题生成一批练习。
+   * fresh=true 表示忽略 5 分钟缓存、强制再来一批（会真的消耗 token）。
+   */
+  aiGenerate: (date: string, taskId: string, fresh = false) =>
+    request<AiGenerateResponse>(
+      '/ai/generate',
+      { method: 'POST', body: JSON.stringify({ date, taskId, fresh }) },
+      0,
+    ),
+
+  aiStats: () => request<AiStats>('/ai/stats'),
+
+  aiBank: (params: { language?: string; kind?: string; limit?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.language) query.set('language', params.language);
+    if (params.kind) query.set('kind', params.kind);
+    if (params.limit) query.set('limit', String(params.limit));
+    const suffix = query.toString();
+    return request<{ items: import('./types').AiBankItem[]; stats: AiStats }>(
+      `/ai/bank${suffix ? `?${suffix}` : ''}`,
+    );
+  },
+
+  /* ---------- 升级自测 ---------- */
+
+  /** 历年真题精选卷列表（按年份倒序，带最好成绩） */
+  examPapers: (language: string) =>
+    request<{
+      papers: import('./types').ExamPaperSummary[];
+      range: { from: number; to: number };
+    }>(`/exams?language=${language}`),
+
+  examPaper: (id: string) =>
+    request<{ paper: import('./types').ExamPaper; items: import('./types').ExamItem[] }>(
+      `/exams/${id}`,
+    ),
+
+  /** 删掉自己导入的卷子：题目与作答记录一起清（内置题库删不掉） */
+  examDelete: (id: string) =>
+    request<{ ok: boolean; id: string }>(`/exams/${id}`, { method: 'DELETE' }, 0),
+
+  examStart: (id: string) =>
+    request<{ attempt: import('./types').ExamAttempt; paper: import('./types').ExamPaper }>(
+      `/exams/${id}/attempts`,
+      { method: 'POST' },
+      0,
+    ),
+
+  examSubmit: (
+    attemptId: string,
+    answers: Array<number | null>,
+    seconds: number,
+    writing: Record<string, string> = {},
+  ) =>
+    request<import('./types').ExamResultResponse>(
+      `/exams/attempts/${attemptId}/submit`,
+      { method: 'POST', body: JSON.stringify({ answers, seconds, writing }) },
+      0,
+    ),
+
+  examAttempt: (attemptId: string) =>
+    request<import('./types').ExamResultResponse>(`/exams/attempts/${attemptId}`),
+
+  examHistory: (language: string) =>
+    request<{ attempts: import('./types').ExamAttemptSummary[] }>(
+      `/exams/attempts?language=${language}`,
+    ),
+
+  /** 上传真题原卷：先建任务再轮询进度（OCR / 分段抽取都可能跑几分钟） */
+  startExamImport: async (
+    file: File,
+    language: string,
+    options: { year: number; paperType: string; ocr: string; title?: string; examName?: string; levelLabel?: string },
+  ): Promise<{ job: import('./types').ExamImportJob }> => {
+    const query = new URLSearchParams({
+      language,
+      name: file.name,
+      year: String(options.year),
+      paperType: options.paperType,
+      ocr: options.ocr,
+      ...(options.title ? { title: options.title } : {}),
+      ...(options.examName ? { examName: options.examName } : {}),
+      ...(options.levelLabel ? { levelLabel: options.levelLabel } : {}),
+    });
+    const response = await fetchWithAuth(`${BASE}/exam-imports?${query.toString()}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: file,
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: { message?: string; code?: string } }
+        | null;
+      throw new ApiError(
+        payload?.error?.message ?? `导入失败（${response.status}）`,
+        response.status,
+        payload?.error?.code ?? 'IMPORT_FAILED',
+      );
+    }
+    return (await response.json()) as { job: import('./types').ExamImportJob };
+  },
+
+  examImportJob: (id: string) =>
+    request<{ job: import('./types').ExamImportJob }>(`/exam-imports/jobs/${id}`, {}, 0),
+
+  importedExams: (language: string) =>
+    request<{ papers: import('./types').ExamPaperSummary[] }>(`/exam-imports?language=${language}`, {}, 0),
+
+  deleteImportedExam: (id: string) =>
+    request<{ ok: boolean }>(`/exam-imports/${id}`, { method: 'DELETE' }, 0),
+
+  /* ── 音色库：所有接口都带 language，服务端按语种隔离 ── */
+  voices: (language: string) => request<VoicesResponse>(`/voices?language=${language}`, {}, 1),
+
+  createVoice: (draft: VoiceDraft) =>
+    request<VoicesResponse>('/voices', { method: 'POST', body: JSON.stringify(draft) }, 0),
+
+  updateVoice: (id: string, patch: Partial<VoiceDraft> & { clearKey?: boolean }) =>
+    request<VoicesResponse>(`/voices/${id}`, { method: 'PUT', body: JSON.stringify(patch) }, 0),
+
+  deleteVoice: (id: string, language: string) =>
+    request<VoicesResponse>(`/voices/${id}?language=${language}`, { method: 'DELETE' }, 0),
+
+  setDefaultVoice: (id: string, language: string) =>
+    request<VoicesResponse>(`/voices/${id}/default`, {
+      method: 'POST',
+      body: JSON.stringify({ language }),
+    }, 0),
+
+  setVoiceAssignments: (language: string, assignments: Partial<VoiceAssignmentMap>) =>
+    request<VoicesResponse>('/voices/assignments', {
+      method: 'PUT',
+      body: JSON.stringify({ language, assignments }),
+    }, 0),
+
+  setVoicePrefs: (language: string, prefs: Partial<VoicePrefs>) =>
+    request<VoicesResponse>('/voices/prefs', {
+      method: 'PUT',
+      body: JSON.stringify({ language, ...prefs }),
+    }, 0),
+
+  discoverVoices: (language: string) =>
+    request<VoiceDiscoverResponse>('/voices/discover', {
+      method: 'POST',
+      body: JSON.stringify({ language }),
+    }, 0),
+
+  importVoices: (language: string, items: VoiceCandidate[]) =>
+    request<VoicesResponse>('/voices/import', {
+      method: 'POST',
+      body: JSON.stringify({ language, items }),
+    }, 0),
+
+  /** 本地 Edge Neural 引擎自检 */
+  edgeTtsStatus: (refresh = false) =>
+    request<EdgeTtsStatus>(`/voices/edge/status${refresh ? '?refresh=1' : ''}`, {}, 0),
+
+  /** 一键为某个语种启用本地 Neural 音色并绑定全部场景 */
+  enableEdgeVoices: (language: string) =>
+    request<VoicesResponse>('/voices/edge/enable', {
+      method: 'POST',
+      body: JSON.stringify({ language }),
+    }, 0),
+
+  /** 云端音色合成：返回可直接塞给 <audio> 的 blob URL，用完请 URL.revokeObjectURL */
+  synthesizeVoice: async (id: string, text: string, language: string, rate?: number): Promise<string> => {
+    const response = await fetchWithAuth(`${BASE}/voices/${id}/synthesize`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text, language, ...(rate !== undefined ? { rate } : {}) }),
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: { message?: string; code?: string } }
+        | null;
+      throw new ApiError(
+        payload?.error?.message ?? `语音合成失败（${response.status}）`,
+        response.status,
+        payload?.error?.code ?? 'TTS_FAILED',
+      );
+    }
+    return URL.createObjectURL(await response.blob());
+  },
+};

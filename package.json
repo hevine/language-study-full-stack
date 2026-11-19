@@ -1,0 +1,53 @@
+{
+  "name": "waiyu-baodian",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "外语考证宝典 —— 输入当前水平与目标分数，自动生成备考计划与每日背诵/朗读材料",
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "tsx watch server/src/index.ts",
+    "dev:web": "vite",
+    "build": "vite build",
+    "start": "cross-env NODE_ENV=production tsx server/src/index.ts",
+    "voice:setup": "test -x .voice-venv/bin/python || python3 -m venv .voice-venv; .voice-venv/bin/python -c 'import edge_tts' 2>/dev/null || .voice-venv/bin/pip install --disable-pip-version-check edge-tts",
+    "smoke": "tsx scripts/smoke.ts",
+    "admin:passwd": "tsx scripts/adminPasswd.ts",
+    "check:ai": "tsx scripts/aiCheck.ts",
+    "check:pool": "tsx scripts/poolCheck.ts",
+    "typecheck": "tsc --noEmit",
+    "import:material": "tsx scripts/importMaterials.ts",
+    "import:exam": "tsx scripts/importExam.ts",
+    "clean:materials": "tsx scripts/cleanMaterials.ts",
+    "topup:exam": "tsx scripts/topUpExam.ts",
+    "fill:audio": "tsx scripts/fillListeningAudio.ts",
+    "build:speech": "tsx scripts/buildSpeechBlock.ts",
+    "import:grammar": "tsx scripts/importGrammarBook.ts",
+    "import:vocab": "tsx scripts/importVocabBook.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "pdf-parse": "^1.1.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.5.0",
+    "@types/react": "^18.3.4",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^9.0.0",
+    "cross-env": "^7.0.3",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.2"
+  }
+}
