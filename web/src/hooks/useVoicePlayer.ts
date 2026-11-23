@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
+import { claimSpeechPlayback, registerSpeechStop } from '@waiyubaodian/ui-kit';
 import type { VoiceItem, VoiceScene } from '../types';
 import { useSpeech } from './useSpeech';
 import { BCP47, matchSystemVoice, SAMPLE_TEXT } from './voiceUtils';
@@ -84,37 +85,45 @@ export function useVoicePlayer(scene: VoiceScene): VoicePlayer {
     setCloudSpeakingId(null);
   }, [speech.stop]);
 
+  // P0-5：把自己登记为全局朗读源，媒体 / 讲解视频开播时可借此抢占出声权
+  useEffect(() => registerSpeechStop(stop), [stop]);
+
   const playCloud = useCallback(
     async (voiceId: string, items: Array<{ text: string; id: string }>, onDone?: () => void) => {
       stop();
       const token = ++tokenRef.current;
       setCloudPlaying(true);
+      let failed = false;
       for (let index = 0; index < items.length; index += 1) {
         const item = items[index];
-        if (token !== tokenRef.current) break;
+        if (token !== tokenRef.current) return;
         setCloudSpeakingId(item.id);
         try {
           const url = await api.synthesizeVoice(voiceId, item.text, language, rate);
           if (token !== tokenRef.current) {
             URL.revokeObjectURL(url);
-            break;
+            return;
           }
-          await new Promise<void>((resolve) => {
+          // 播放成功/失败用布尔值区分：失败要能被 catch 捕获并触发回退，
+          // 不能像过去那样 onerror 也当成"正常播完"静默跳过。
+          const ok = await new Promise<boolean>((resolve) => {
             const audio = new Audio(url);
             audioRef.current = audio;
             let settled = false;
-            const finish = () => {
+            const finish = (success: boolean) => {
               if (settled) return;
               settled = true;
               URL.revokeObjectURL(url);
               if (audioRef.current === audio) audioRef.current = null;
-              resolve();
+              resolve(success);
             };
-            audio.onended = finish;
-            audio.onerror = finish;
-            void audio.play().catch(finish);
+            audio.onended = () => finish(true);
+            audio.onerror = () => finish(false);
+            void audio.play().catch(() => finish(false));
           });
+          if (!ok) throw new Error('音频播放失败');
         } catch (err) {
+          if (token !== tokenRef.current) return;
           // 本地 Edge 是非官方接口，哪天 403 了不能让朗读直接哑掉：
           // 从失败的那一条开始，自动接回系统音色继续播完。
           const reason = (err as Error).message;
@@ -132,14 +141,16 @@ export function useVoicePlayer(scene: VoiceScene): VoicePlayer {
             });
             return;
           }
+          // 没有可用回退：这是一次失败，绝不能触发 onDone 让调用方误判为"播完了"
           setError(reason);
+          failed = true;
           break;
         }
       }
       if (token === tokenRef.current) {
         setCloudPlaying(false);
         setCloudSpeakingId(null);
-        onDone?.();
+        if (!failed) onDone?.();
       }
     },
     [language, rate, stop, data, systemVoices, bcp47, speech],
@@ -149,6 +160,8 @@ export function useVoicePlayer(scene: VoiceScene): VoicePlayer {
     (items: Array<{ text: string; id: string }>, onDone?: () => void) => {
       setError(null);
       if (items.length === 0) return;
+      // P0-5：朗读开播先抢占全局出声权，停掉正在播放的媒体 / 讲解视频
+      claimSpeechPlayback();
       if (voice?.provider === 'cloud') {
         void playCloud(voice.id, items, onDone);
         return;

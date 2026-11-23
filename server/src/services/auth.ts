@@ -12,8 +12,11 @@ import {
 } from '../lib/errors';
 import { logger } from '../lib/logger';
 import {
+  AUTH_ROLES,
   LOCAL_USER_ID,
   PROVIDER_LABELS,
+  isJlptLevel,
+  isPublicRegisterRole,
   type AuthRole,
   type AuthUser,
   type ExternalIdentity,
@@ -112,6 +115,8 @@ export function publicAuthConfig(): {
   required: boolean;
   guestAllowed: boolean;
   passwordEnabled: boolean;
+  allowRegister: boolean;
+  newUserStatus: 'active' | 'pending';
   providers: ReturnType<typeof providerDescriptors>;
   publicBaseUrl: string;
   accessTtlSec: number;
@@ -119,7 +124,11 @@ export function publicAuthConfig(): {
   return {
     required: env.auth.required,
     guestAllowed: !env.auth.required,
-    passwordEnabled: Boolean(repo.findUserById(LOCAL_USER_ID)?.password_hash),
+    // 语义修正：原来看 local 有没有密码；现在只要「允许注册」或「存在任一密码账号」，
+    // 登录页就应展示密码入口，否则开放注册后仍提示「未设置管理员密码」是错的。
+    passwordEnabled: env.auth.allowRegister || repo.countUsersWithPassword() > 0,
+    allowRegister: env.auth.allowRegister,
+    newUserStatus: env.auth.newUserStatus,
     providers: providerDescriptors(),
     publicBaseUrl: env.auth.publicBaseUrl,
     accessTtlSec: env.auth.accessTtlSec,
@@ -198,21 +207,257 @@ export function resolveAccessToken(token: string): AuthUser {
   return repo.toAuthUser(user);
 }
 
+// ----------------------------------------------------------- 校验规则（注册/改密/建号共用）
+
+/** 用户名：3–40 位字母、数字或 . _ -；统一转小写存储，配合 NOCASE 唯一索引防重复 */
+export function assertUsername(raw: string): string {
+  const username = (raw ?? '').trim().toLowerCase();
+  if (!/^[a-zA-Z0-9._-]{3,40}$/.test(username)) {
+    throw new ValidationError('用户名需为 3–40 位字母、数字或 . _ -');
+  }
+  return username;
+}
+
+/** 密码：8–72 位（scrypt 输入上限），必须含字母与数字，且不得与用户名相同 */
+export function assertPassword(password: string, username?: string): void {
+  if (typeof password !== 'string' || password.length < 8 || password.length > 72) {
+    throw new ValidationError('密码需为 8–72 位');
+  }
+  if (!/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
+    throw new ValidationError('密码必须同时包含字母和数字');
+  }
+  if (username && password.toLowerCase() === username.toLowerCase()) {
+    throw new ValidationError('密码不能与账号相同');
+  }
+}
+
 // ----------------------------------------------------------- 账号密码登录
 
 export function loginWithPassword(username: string, password: string, meta: RequestMeta): TokenPair {
   const name = (username ?? '').trim();
   if (!name || !password) throw new ValidationError('请输入账号与密码');
   const user = repo.findUserByUsername(name);
+
+  // 账号级失败锁定：命中锁定期的用户直接拒绝，不再跑 scrypt（省 CPU，且给出剩余秒数）
+  if (user) {
+    const remain = repo.lockedRemainingSec(user.id);
+    if (remain > 0) {
+      audit('login_locked', meta, { userId: user.id, detail: `username=${name.slice(0, 40)} remain=${remain}s` });
+      throw new ForbiddenError(`账号已锁定，请在 ${remain} 秒后重试`, 'ACCOUNT_LOCKED');
+    }
+  }
+
   const ok = verifyPassword(password, user?.password_hash ?? DUMMY_HASH);
   if (!user || !ok) {
-    audit('login_failed', meta, { detail: `username=${name.slice(0, 40)}` });
+    if (user) {
+      const state = repo.recordLoginFailure(user.id, env.auth.lockThreshold, env.auth.lockMinutes);
+      audit('login_failed', meta, {
+        userId: user.id,
+        detail: `username=${name.slice(0, 40)} attempts=${state.attempts}${state.lockedUntil ? ' locked' : ''}`,
+      });
+      if (state.lockedUntil) {
+        throw new ForbiddenError(
+          `密码错误次数过多，账号已锁定 ${env.auth.lockMinutes} 分钟`,
+          'ACCOUNT_LOCKED',
+        );
+      }
+    } else {
+      // 用户不存在也跑过 DUMMY_HASH 了，耗时一致，不泄漏账号是否存在
+      audit('login_failed', meta, { detail: `username=${name.slice(0, 40)}` });
+    }
     throw new UnauthorizedError('账号或密码不正确', 'INVALID_CREDENTIALS');
   }
   if (user.status !== 'active') {
     throw new ForbiddenError(user.status === 'pending' ? '账号待管理员审核' : '账号已被停用', 'ACCOUNT_INACTIVE');
   }
+  repo.clearLoginFailure(user.id);
   return issueTokenPair(user, meta, { event: 'login_password', provider: null });
+}
+
+// ------------------------------------------------------------- 自助注册
+
+export interface RegisterInput {
+  username: string;
+  password: string;
+  displayName?: string;
+  role?: string;
+  jlptLevel?: string;
+}
+
+/**
+ * 自助注册。status=active 时直接签发令牌（与密码登录同一套令牌链）；
+ * status=pending 时只建号不签令牌，待管理员启用。
+ *
+ * 安全要点：
+ *   · 引导开关 AUTH_ALLOW_REGISTER 控制总闸门；
+ *   · 角色只允许 student / teacher，绝不接 admin，杜绝自助提权；
+ *   · 不预查用户是否存在（TOCTOU + 枚举），直接 INSERT，靠唯一约束转 409；
+ *   · 必须建 profile 行，否则页面昵称退化成「学员」。
+ */
+export function registerWithPassword(
+  input: RegisterInput,
+  meta: RequestMeta,
+): TokenPair | { pending: true; user: AuthUser } {
+  if (!env.auth.allowRegister) {
+    throw new ForbiddenError('本站暂未开放注册', 'REGISTER_DISABLED');
+  }
+  const username = assertUsername(input.username);
+  assertPassword(input.password, username);
+
+  // 角色白名单：默认 student；admin / 其它任意值一律拒绝
+  const role = input.role === undefined || input.role === '' ? 'student' : input.role;
+  if (!isPublicRegisterRole(role)) {
+    throw new ValidationError('注册身份只能是学生或教师');
+  }
+  // 教师可选填能力等级；学生忽略该字段
+  let jlptLevel: import('../auth/constants').JlptLevel | null = null;
+  if (role === 'teacher' && input.jlptLevel) {
+    if (!isJlptLevel(input.jlptLevel)) {
+      throw new ValidationError('教师能力等级只能是 N1–N5');
+    }
+    jlptLevel = input.jlptLevel;
+  }
+
+  const displayName = (input.displayName?.trim() || username).slice(0, 60);
+  let user: repo.UserRow;
+  try {
+    user = repo.createUser({
+      username,
+      passwordHash: hashPassword(input.password),
+      displayName,
+      role,
+      status: env.auth.newUserStatus,
+      jlptLevel: jlptLevel ?? null,
+      providerHint: 'password',
+    });
+  } catch (err) {
+    if (repo.isUniqueViolation(err)) {
+      throw new ConflictError('这个用户名已被使用', 'USERNAME_TAKEN');
+    }
+    throw err;
+  }
+  repo.ensureProfileForUser(user.id, displayName);
+  audit('user_registered', meta, {
+    userId: user.id,
+    detail: `username=${username} role=${role}${jlptLevel ? ` jlpt=${jlptLevel}` : ''} status=${user.status}`,
+  });
+  logger.info('user registered', { userId: user.id, role, status: user.status });
+
+  if (user.status !== 'active') return { pending: true, user: repo.toAuthUser(user) };
+  return issueTokenPair(user, meta, { event: 'login_password', provider: null });
+}
+
+// ------------------------------------------------------------- 账号自助维护
+
+/** 从 access token 取出当前会话 ID；改密码时用它保留本设备、踢掉其它设备 */
+export function sessionIdFromToken(token: string): string | null {
+  try {
+    return verifyAccessToken(token, {
+      secret: env.auth.jwtSecret,
+      issuer: env.auth.issuer,
+      audience: env.auth.audience,
+    }).sid;
+  } catch {
+    return null;
+  }
+}
+
+/** 改昵称/头像：users 与 profile 两份昵称必须同步，否则两处显示不一致 */
+export function updateMe(
+  userId: string,
+  patch: { displayName?: string; avatarUrl?: string | null },
+): AuthUser {
+  const user = repo.findUserById(userId);
+  if (!user) throw new NotFoundError('账号不存在');
+  const changes: Partial<Parameters<typeof repo.updateUser>[1]> = {};
+  if (patch.displayName !== undefined) {
+    const name = patch.displayName.trim().slice(0, 60);
+    if (!name) throw new ValidationError('昵称不能为空');
+    changes.displayName = name;
+  }
+  if (patch.avatarUrl !== undefined) {
+    changes.avatarUrl = patch.avatarUrl ? patch.avatarUrl.slice(0, 500) : null;
+  }
+  const updated = repo.updateUser(userId, changes)!;
+  if (changes.displayName !== undefined) {
+    repo.setProfileDisplayName(userId, changes.displayName);
+  }
+  audit('profile_updated', { ip: null, userAgent: null }, { userId, detail: 'displayName/avatar' });
+  return repo.toAuthUser(updated);
+}
+
+/**
+ * 改密码：先验旧密码，再写新哈希。成功后撤销其它所有设备会话，仅保留当前会话，
+ * 避免密码泄露后攻击者持有的旧会话继续有效。
+ */
+export function changePassword(
+  userId: string,
+  currentPassword: string,
+  newPassword: string,
+  currentSessionId: string | null,
+): void {
+  const user = repo.findUserById(userId);
+  if (!user) throw new NotFoundError('账号不存在');
+  if (!user.password_hash) {
+    throw new ValidationError('当前账号未设置密码，请先用管理员重置');
+  }
+  if (!verifyPassword(currentPassword, user.password_hash)) {
+    throw new UnauthorizedError('当前密码不正确', 'INVALID_CURRENT_PASSWORD');
+  }
+  assertPassword(newPassword, user.username ?? undefined);
+  if (verifyPassword(newPassword, user.password_hash)) {
+    throw new ValidationError('新密码不能与当前密码相同');
+  }
+  repo.updateUser(userId, { passwordHash: hashPassword(newPassword) });
+  if (currentSessionId) repo.revokeOtherSessions(userId, currentSessionId);
+  repo.clearLoginFailure(userId);
+  audit('password_changed', { ip: null, userAgent: null }, { userId, detail: 'self-service' });
+}
+
+/** 管理员重置任意用户密码：同时撤销该用户全部会话，强制重新登录 */
+export function adminResetPassword(id: string, password: string): AuthUser {
+  const user = repo.findUserById(id);
+  if (!user) throw new NotFoundError('用户不存在');
+  assertPassword(password);
+  repo.updateUser(id, { passwordHash: hashPassword(password) });
+  repo.revokeAllSessions(id);
+  repo.clearLoginFailure(id);
+  audit('password_reset_by_admin', { ip: null, userAgent: null }, {
+    userId: id,
+    detail: `target=${user.username ?? user.id}`,
+  });
+  return repo.toAuthUser(repo.findUserById(id)!);
+}
+
+// ------------------------------------------------------------- 游客数据认领
+
+export function claimGuestPreview(): Array<{ table: string; count: number }> {
+  return repo.countClaimable(LOCAL_USER_ID);
+}
+
+/**
+ * 认领 local 名下的游客数据到当前账号。这是一个不可逆操作，调用方（路由/前端）
+ * 必须先展示预览并取得显式确认。API Key 也在搬移范围内，前端文案需明确提示。
+ */
+export function claimGuestData(userId: string, meta: RequestMeta): Array<{ table: string; moved: number }> {
+  if (userId === LOCAL_USER_ID) {
+    throw new ValidationError('当前已是游客账号，无需认领');
+  }
+  let result: Array<{ table: string; moved: number }>;
+  try {
+    result = repo.claimUserData(LOCAL_USER_ID, userId);
+  } catch (err) {
+    if (repo.isUniqueViolation(err)) {
+      throw new ConflictError('部分数据与当前账号冲突，已回滚，未搬移任何数据', 'CLAIM_CONFLICT');
+    }
+    throw err;
+  }
+  const total = result.reduce((sum, item) => sum + item.moved, 0);
+  audit('guest_data_claimed', meta, {
+    userId,
+    detail: `from=${LOCAL_USER_ID} total=${total} ${result.filter((r) => r.moved > 0).map((r) => `${r.table}:${r.moved}`).join(',')}`,
+  });
+  return result;
 }
 
 // ------------------------------------------------------------- 扫码登录
@@ -507,6 +752,13 @@ export function adminUpdateUser(
   if (!user) throw new NotFoundError('用户不存在');
   assertNotLastAdmin(user, patch);
   const updated = repo.updateUser(id, patch);
+  if (patch.displayName !== undefined) {
+    repo.setProfileDisplayName(id, patch.displayName);
+  }
+  audit('user_updated_by_admin', { ip: null, userAgent: null }, {
+    userId: id,
+    detail: `role=${user.role} patch=${Object.keys(patch).join(',')}`,
+  });
   return repo.toAuthUser(updated!);
 }
 
@@ -516,23 +768,34 @@ export function adminCreateUser(input: {
   password: string;
   displayName?: string;
   role?: AuthRole;
+  jlptLevel?: string;
 }): AuthUser {
-  const username = (input.username ?? '').trim();
-  if (!/^[a-zA-Z0-9._-]{3,40}$/.test(username)) {
-    throw new ValidationError('用户名需为 3–40 位字母、数字或 . _ -');
+  const username = assertUsername(input.username);
+  assertPassword(input.password, username);
+  const role = input.role ?? 'user';
+  if (!(AUTH_ROLES as readonly string[]).includes(role)) {
+    throw new ValidationError('角色不合法');
   }
-  if ((input.password ?? '').length < 8) throw new ValidationError('密码至少 8 位');
-  if (repo.findUserByUsername(username)) throw new ConflictError('这个用户名已被使用');
-
+  // 唯一性交给 INSERT 的 UNIQUE 约束判定，避免 find-then-insert 的 TOCTOU
+  const jlptLevel = role === 'teacher' && input.jlptLevel && isJlptLevel(input.jlptLevel)
+    ? input.jlptLevel
+    : null;
   const displayName = (input.displayName?.trim() || username).slice(0, 60);
-  const user = repo.createUser({
-    username,
-    passwordHash: hashPassword(input.password),
-    displayName,
-    role: input.role ?? 'user',
-    status: 'active',
-    providerHint: 'password',
-  });
+  let user: repo.UserRow;
+  try {
+    user = repo.createUser({
+      username,
+      passwordHash: hashPassword(input.password),
+      displayName,
+      role,
+      status: 'active',
+      jlptLevel: jlptLevel ?? null,
+      providerHint: 'password',
+    });
+  } catch (err) {
+    if (repo.isUniqueViolation(err)) throw new ConflictError('这个用户名已被使用', 'USERNAME_TAKEN');
+    throw err;
+  }
   repo.ensureProfileForUser(user.id, displayName);
   audit('user_created_by_admin', { ip: null, userAgent: null }, {
     userId: user.id,

@@ -8,6 +8,9 @@ export interface ArticleRecord extends ArticlePayload {
   source: 'llm' | 'library' | 'material';
   model: string | null;
   estMinutes: number;
+  /** 所属计划的目标级别标签（如「N1 合格」「托福 100」）：解题视频用它选教学法 */
+  examLabel?: string | null;
+  examId?: string | null;
 }
 
 interface ContentRow {
@@ -23,6 +26,8 @@ interface ContentRow {
   est_minutes: number;
   source: string;
   model: string | null;
+  plan_exam_id?: string | null;
+  plan_target_label?: string | null;
 }
 
 function mapContent(row: ContentRow): ArticleRecord {
@@ -38,6 +43,8 @@ function mapContent(row: ContentRow): ArticleRecord {
     estMinutes: row.est_minutes,
     source: row.source as ArticleRecord['source'],
     model: row.model,
+    examLabel: row.plan_target_label ?? null,
+    examId: row.plan_exam_id ?? null,
   };
 }
 
@@ -50,6 +57,22 @@ export function listDayContents(dayId: string): ArticleRecord[] {
 
 export function deleteDayContents(dayId: string): void {
   db.prepare('DELETE FROM day_contents WHERE day_id = ?').run(dayId);
+}
+
+/** 按稳定 id 取单篇精读材料：解题答疑视频以 article.id 为绑定键 */
+export function getDayContentById(id: string): ArticleRecord | null {
+  if (!id) return null;
+  // 带上所属计划的目标级别：解题视频据此选 N1/N5 之类的教学法（拿不到就为 null）
+  const row = db
+    .prepare(
+      `SELECT c.*, p.exam_id AS plan_exam_id, p.target_label AS plan_target_label
+         FROM day_contents c
+         LEFT JOIN plan_days d ON d.id = c.day_id
+         LEFT JOIN plans p ON p.id = d.plan_id
+        WHERE c.id = ?`,
+    )
+    .get(id) as ContentRow | undefined;
+  return row ? mapContent(row) : null;
 }
 
 export function saveDayContent(

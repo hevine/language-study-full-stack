@@ -85,6 +85,130 @@ export interface Question {
   explain?: string;
 }
 
+/** 解题答疑视频（与 @waiyubaodian/explain-video 的 ExplainVideo 结构兼容） */
+export interface ExplainVideoLike {
+  id: string;
+  articleId: string;
+  language: 'en' | 'ja' | 'ko';
+  narrationLanguage: 'target' | 'zh';
+  voice: string;
+  title: string;
+  totalMs: number;
+  shots: Array<{
+    id: string;
+    kind: string;
+    narration: string;
+    /** 中文讲师口播稿；有它才说明这条片带母语轨 */
+    narrationZh?: string;
+    caption: string;
+    questionNo?: number;
+    prompt?: string;
+    options?: string[];
+    highlight?: { paragraph?: number; sentence?: string; options?: number[]; picked?: number };
+    grammar?: { sentence: string; structure: string; explanation: string; translation?: string };
+    point?: { label: string; text: string };
+    audio: {
+      url: string;
+      durationMs: number;
+      boundaries?: Array<{ text: string; offsetMs: number; durationMs: number }>;
+      /** 母语讲师轨；缺省表示只有目标语轨 */
+      native?: { url: string; durationMs: number; boundaries?: Array<{ text: string; offsetMs: number; durationMs: number }> };
+    };
+  }>;
+  cues: Array<{
+    id: string;
+    shotIndex: number;
+    text: string;
+    narration: string;
+    startMs: number;
+    endMs: number;
+    edited?: boolean;
+  }>;
+  createdAt: string;
+  updatedAt?: string;
+  /** 讲师轨形态：target 只有目标语；bilingual 带中文讲师轨 */
+  coach?: ExplainCoachMode;
+  meta?: {
+    model: string | null;
+    usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+    scriptVersion: number;
+    /** 生成时选的讲解深度（short/medium/long） */
+    depth?: ExplainDepth;
+    /** 教案档位（n5…n1 / toefl / cet …）：共享缓存按它隔离 */
+    band?: string;
+    /** 首个生成者 */
+    ownerId?: string;
+    /** 母语轨单独记账的 token */
+    nativeUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+    /** 重配音记录（只跑 TTS、不调大模型，所以不计 token） */
+    revoice?: { at: string; voice: string; by: string };
+    /** 脚本质量留痕：模型输出不干净时前端要如实提示，而不是假装一切正常 */
+    quality?: { salvage: boolean; truncated: boolean; autoFilledShots: number };
+  };
+}
+
+/** 讲师轨形态：目标语单轨 / 双向双语 */
+export type ExplainCoachMode = 'target' | 'bilingual';
+
+/**
+ * 导出音轨：
+ *  - target 原文音轨
+ *  - native 中文讲师音轨
+ *  - both   同一容器两条音轨（剪辑软件/播放器可切语言）
+ */
+export type ExplainExportTrack = 'target' | 'native' | 'both';
+
+/** 历史讲解条目（含跨用户共享的片子） */
+export interface ExplainVideoSummary {
+  id: string;
+  articleId: string;
+  title: string;
+  totalMs: number;
+  createdAt: string;
+  depth?: string;
+  band?: string;
+  coach?: string;
+  shots: number;
+  /** shared = 别人生成、你直接复用；personal = 你自己生成，或你在共享片基础上改过 */
+  source: 'shared' | 'personal';
+  mine: boolean;
+  /** 共享片的个人副本（改过逐字稿或换过音色）：不是我的，但我改过 */
+  revised?: boolean;
+}
+
+/** 讲解深度：短=每题3镜、中=5镜、长=6–7镜；影响时长与 token */
+export type ExplainDepth = 'short' | 'medium' | 'long';
+
+/** 服务端算好的单档预估（时长 / token / 是否已生成） */
+export interface ExplainDepthEstimate {
+  id: ExplainDepth;
+  label: string;
+  blurb: string;
+  shots: number;
+  /** 成片时长（秒） */
+  secLow: number;
+  secHigh: number;
+  /** 生成等待（秒）：写脚本 + 配音 + 组装 */
+  genSecLow: number;
+  genSecHigh: number;
+  tokenLow: number;
+  tokenHigh: number;
+  cached: boolean;
+  videoId?: string;
+  /** 缓存来自共享层还是自己的副本 */
+  source?: 'shared' | 'personal';
+  /** 已缓存的这条片是否带母语讲师轨 */
+  hasNative?: boolean;
+}
+
+/** 三档预估 + 教案级别 + 补母语轨的单独成本 */
+export interface ExplainEstimateResponse {
+  depths: ExplainDepthEstimate[];
+  level: { label: string; examLabel: string | null; band: string };
+  /** 给已有视频补一条中文讲师轨的估算（不重跑脚本，只转述 + 配音） */
+  nativeCost: { tokenLow: number; tokenHigh: number; minutesLow: number; minutesHigh: number };
+}
+
 export interface ReadingSegment {
   text: string;
   translation?: string | null;
@@ -354,8 +478,89 @@ export interface LlmPoolSummary {
   activeModel: string | null;
 }
 
+/** 语音识别号池里的一条线路；maskedKey 永远是掩码 */
+export interface AsrPoolKey {
+  id: string;
+  label: string;
+  baseUrl: string;
+  model: string;
+  maskedKey: string;
+  fingerprint: string;
+  persist: boolean;
+  enabled: boolean;
+  priority: number;
+  status: LlmKeyStatus;
+  cooldownUntil: string | null;
+  cooldownSeconds: number;
+  failCount: number;
+  successCount: number;
+  lastError: string | null;
+  lastErrorAt: string | null;
+  lastUsedAt: string | null;
+  needsKey: boolean;
+  source: 'db' | 'env';
+}
+
+/** 语音识别（录音转写）号池视图 */
+export interface AsrSettingsView {
+  configured: boolean;
+  source: 'env' | 'pool' | 'none';
+  suggestion: { baseUrl: string; model: string; note: string };
+  keys: AsrPoolKey[];
+  summary: LlmPoolSummary;
+}
+
+/** 本地兜底 ASR 服务（SenseVoiceSmall）的实时状态 */
+export interface LocalAsrStatus {
+  /** venv 与模型是否已装好 */
+  installed: boolean;
+  baseUrl: string;
+  running: boolean;
+  /** 模型此刻是否驻留内存 */
+  loaded: boolean;
+  loading: boolean;
+  model: string | null;
+  device: string | null;
+  idleUnloadSec: number | null;
+  idleSec: number | null;
+  uptimeSec: number | null;
+  loadMs: number | null;
+  total: number;
+  failed: number;
+  last: {
+    atMs: number;
+    elapsedMs: number;
+    language: string;
+    chars: number;
+    bytes: number;
+    coldStart: boolean;
+  } | null;
+  error: string | null;
+  checkedAt: number;
+}
+
+/** 线路连通测试结果 */
+export interface AsrPingResult {
+  ok: boolean;
+  latencyMs: number;
+  message: string;
+  status?: number;
+  snippet?: string;
+  text?: string;
+}
+
+/** POST /asr 的识别结果 */
+export interface TranscribeResult {
+  text: string;
+  language: Language;
+  model: string;
+  source: AsrSettingsView['source'];
+  line: string;
+}
+
 export interface SettingsResponse {
   profile: { userId: string; displayName: string; goalNote: string | null };
+  asr: AsrSettingsView;
   llm: {
     configured: boolean;
     availableNow: number;
@@ -730,6 +935,28 @@ export interface LearningPath {
   };
 }
 
+
+/** 听力库条目：音频本体在服务端 DATA_DIR/listening/<user>/，这里只是元数据 */
+export interface ListeningMaterial {
+  id: string;
+  language: Language;
+  title: string;
+  fileName: string;
+  fileSize: number;
+  mime: string;
+  ext: string;
+  durationSec: number;
+  note: string | null;
+  createdAt: string;
+}
+
+export interface ListeningMaterialsResponse {
+  materials: ListeningMaterial[];
+}
+
+export interface ListeningMaterialUploadResponse {
+  material: ListeningMaterial;
+}
 
 export interface MaterialSummary {
   id: string;
@@ -1119,7 +1346,9 @@ export interface VoiceDiscoverResponse {
 
 // ---------------------------------------------------------------- 用户与鉴权
 
-export type AuthRole = 'admin' | 'user';
+export type AuthRole = 'admin' | 'user' | 'student' | 'teacher';
+export type PublicRegisterRole = 'student' | 'teacher';
+export type JlptLevel = 'N1' | 'N2' | 'N3' | 'N4' | 'N5';
 export type UserStatus = 'active' | 'pending' | 'disabled';
 export type AuthProviderId = 'wechat' | 'dingtalk';
 
@@ -1131,9 +1360,26 @@ export interface AuthUser {
   role: AuthRole;
   status: UserStatus;
   providerHint: string | null;
+  jlptLevel: JlptLevel | null;
+  email: string | null;
   lastLoginAt: string | null;
   createdAt: string;
   identities: Array<{ provider: AuthProviderId; displayName: string | null }>;
+}
+
+export interface RegisterInput {
+  username: string;
+  password: string;
+  displayName?: string;
+  role?: PublicRegisterRole;
+  jlptLevel?: JlptLevel;
+}
+
+export type RegisterResponse = TokenResponse | { pending: true; user: AuthUser };
+
+export interface ClaimTableCount {
+  table: string;
+  count: number;
 }
 
 export interface AuthProviderInfo {
@@ -1148,6 +1394,8 @@ export interface AuthConfig {
   required: boolean;
   guestAllowed: boolean;
   passwordEnabled: boolean;
+  allowRegister: boolean;
+  newUserStatus: 'active' | 'pending';
   providers: AuthProviderInfo[];
   publicBaseUrl: string;
   accessTtlSec: number;

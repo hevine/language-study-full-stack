@@ -1,0 +1,503 @@
+/**
+ * 解题答疑视频 · 分级教学法（把五份 N5–N1 通用教案的方法论翻译成提示词）
+ *
+ * 为什么单独成文件：
+ *   1. 教案是「怎么教」，不是「怎么生成 JSON」。混进 explainScript 会让契约与教学法纠缠，
+ *      以后调教学法不该碰解析与抢救逻辑；
+ *   2. 五个级别的工具（骨架 / 时间轴 / 指代 / 论证四格 / 立场尺度）差别很大，
+ *      而模型拿到「N1 材料 + N5 讲法」会讲成逐句翻译，必须按级别注入；
+ *   3. 长度档位（短/中/长）同时影响分镜数、旁白字数、maxTokens 与超时，
+ *      这些数字只应有一处定义（这里），路由、流水线、预估接口都读它。
+ *
+ * 对应教案：
+ *   N5 骨架与助词换位 / N4 时间轴与四条件形 / N3 段落功能与指代 /
+ *   N2 论证四格与干扰项五类 / N1 立场尺度与删词测试。
+ * 英语、韩语级别是同构迁移（段落功能 + 同义替换 / 连接词逻辑），在 profile 里注明。
+ */
+import type { Language } from '../domain/language';
+
+// --------------------------------------------------------------- 长度档位
+
+export type ExplainDepth = 'short' | 'medium' | 'long';
+
+export const DEPTH_IDS: readonly ExplainDepth[] = ['short', 'medium', 'long'];
+
+export function isExplainDepth(value: unknown): value is ExplainDepth {
+  return typeof value === 'string' && (DEPTH_IDS as readonly string[]).includes(value);
+}
+
+export interface DepthPlan {
+  id: ExplainDepth;
+  label: string;
+  blurb: string;
+  /** 每题分镜数（不含 cover / takeaway） */
+  shotsPerQuestion: number;
+  /** 每题旁白字数区间（目标语字符 / 英文按词） */
+  charsPerQuestion: [number, number];
+  /** 单镜旁白下限：低于这个数就是在念答案，不是在讲课 */
+  shotFloor: number;
+  /** 单镜旁白上限，防止一镜讲两分钟、画面卡住 */
+  charCap: number;
+  /** 全片允许的 grammar 镜上限 */
+  grammarShots: number;
+  maxTokens: number;
+  /** 单次上游请求超时：输出越多，模型吐得越久，90s 的默认值会把长档误杀 */
+  requestTimeoutMs: number;
+  /** 脚本阶段总超时（含线路轮换）：长档输出多，给更宽的预算 */
+  scriptTimeoutMs: number;
+  /** 成片时长上限（校验用） */
+  videoCapMs: number;
+  /** 每镜平均输出 token（含 JSON 结构），用于预估 */
+  tokensPerShot: number;
+}
+
+export const DEPTH_PLANS: Record<ExplainDepth, DepthPlan> = {
+  short: {
+    id: 'short',
+    label: '精简',
+    blurb: '每题三镜：题 → 证据 → 答案。适合复习与快速过题。',
+    shotsPerQuestion: 3,
+    charsPerQuestion: [130, 200],
+    shotFloor: 32,
+    charCap: 90,
+    grammarShots: 1,
+    maxTokens: 5000,
+    requestTimeoutMs: 240_000,
+    scriptTimeoutMs: 9 * 60_000,
+    videoCapMs: 20 * 60_000,
+    tokensPerShot: 440,
+  },
+  medium: {
+    id: 'medium',
+    label: '标准',
+    blurb: '每题五镜：定位 → 拆解 → 排除 → 答案 → 迁移。日常主用。',
+    shotsPerQuestion: 5,
+    charsPerQuestion: [320, 440],
+    shotFloor: 48,
+    charCap: 100,
+    grammarShots: 2,
+    // 实测标准档输出 8.9–9.2k：给 9000 会周期性触发「截断 → 翻倍重试」，白花一倍时间
+    maxTokens: 10_500,
+    requestTimeoutMs: 300_000,
+    scriptTimeoutMs: 12 * 60_000,
+    videoCapMs: 20 * 60_000,
+    tokensPerShot: 480,
+  },
+  long: {
+    id: 'long',
+    label: '精讲',
+    blurb: '每题六到七镜，含语法专镜与第二个视角。难题、长文用。',
+    shotsPerQuestion: 6,
+    charsPerQuestion: [520, 680],
+    shotFloor: 66,
+    charCap: 110,
+    grammarShots: 3,
+    maxTokens: 15_000,
+    requestTimeoutMs: 420_000,
+    scriptTimeoutMs: 15 * 60_000,
+    videoCapMs: 20 * 60_000,
+    tokensPerShot: 600,
+  },
+};
+
+// --------------------------------------------------------------- 级别画像
+
+export type LevelBand =
+  | 'n5' | 'n4' | 'n3' | 'n2' | 'n1'
+  | 'toefl' | 'ielts' | 'cet' | 'kaoyan' | 'topik'
+  | 'generic';
+
+export interface LevelProfile {
+  band: LevelBand;
+  /** 展示名，例如「N1 · 立场与语气」 */
+  label: string;
+  /** 一句话学情：学生卡在哪 */
+  learner: string;
+  /** 开场怎么切入（教案的第一环节） */
+  entry: string;
+  /** 拆解工具：讲证据句时必须用其中至少两项 */
+  tools: string[];
+  /** 干扰项命名表：排除时必须叫出名字，不许说「感觉不对」 */
+  trapNames: string[];
+  /** 语言风格：语速、句长、术语密度 */
+  register: string;
+  /** 一句示范旁白：给模型定调（目标语） */
+  sample: string;
+}
+
+const PROFILES: Record<LevelBand, LevelProfile> = {
+  n5: {
+    band: 'n5',
+    label: 'N5 · 句子骨架与助词',
+    learner: '单词查得出意思，但整句读不出主干；は/が、に/で 常混。',
+    entry: '先给一个具体画面（谁、在哪、做什么），让学生用一句话说出来，再回到原句。',
+    tools: [
+      '骨架还原：把句子压成「誰が｜どこで｜何を｜しました」，再还原成完整句',
+      '助词换位测试：把 は/が 或 に/で 换成另一个读一遍，问「意思变了没有、变成什么」',
+      '朗读停顿：在助词后画一道斜线，说明为什么在这里换气',
+      '依据句：每一题都指出文中第几句是证据，不用排除法代替',
+    ],
+    trapNames: ['主语看错（は/が）', '场所与时间错位（に/で）', '否定看漏', '时态看错'],
+    register: '短句，一句不超过 20 字，但一镜要用两三个短句连成一段话，不要只丢一个词组；语速慢；术语出现即解释。',
+    sample: 'まず主語を探しましょう。「わたしは」——ここが主題です。じゃあ「どこで」は？「で」が付いた言葉が場所なんです。',
+  },
+  n4: {
+    band: 'n4',
+    label: 'N4 · 时间轴与条件形',
+    learner: '事件能看懂，但先后顺序与条件关系常排错；授受方向容易画反。',
+    entry: '先问「这两件事哪个先发生」，把学生的直觉写在时间轴上，再回原文核对。',
+    tools: [
+      '时间轴：てから／あとで／前に／ながら 各标一个点，顺序错就指回标记所在句',
+      '四条件形对比：と・ば・たら・なら 同一情境各读一遍，找出「哪一句不能用、为什么」',
+      '授受箭头：谁→谁画箭头，箭头画反就回到授受动词重读',
+      '接续词方向：だから（顺）／しかし（逆）／そのため（因果）先判方向再选词',
+    ],
+    trapNames: ['先后颠倒', '条件形误用', '授受方向反了', '接续关系判反'],
+    register: '句子短而完整，一镜至少两三个句子；多用「まず／次に／ここで」这类路标词；术语少。',
+    sample: 'まず時間の順番を見ましょう。どちらが先ですか。「てから」があるから、こちらが先です。逆に読むと、話が合わなくなります。',
+  },
+  n3: {
+    band: 'n3',
+    label: 'N3 · 段落功能与指代',
+    learner: '每句都懂、全文不懂；概括时爱抄原句；こ・そ・あ 追丢。',
+    entry: '先问「这段话到底在回答什么问题」，把学生的答案与标题并置，制造落差。',
+    tools: [
+      '段落功能标签：提出／例示／对比／让步／结论，一段一个标签',
+      '主题句定位：段首、段末、或「つまり／要するに」之后',
+      '指代箭头：それ・これ 指向哪一句，写清「これ＝何」，注意跨句回指',
+      '事实／评价分栏：这句是客观陈述还是作者判断，分两栏抄',
+      '选项回填：把选项放回原文对应位置，标「一致／矛盾／文中未提」',
+    ],
+    trapNames: ['以偏概全', '张冠李戴（把引用当主张）', '文中未提', '指代对象错'],
+    register: '中等句长；用「这段在做什么」组织语言；少背定义，多给判断动作。',
+    sample: 'この段落は、新しい主張ですか、それとも例を挙げていますか。「たとえば」があるなら、答えはもう決まっています。',
+  },
+  n2: {
+    band: 'n2',
+    label: 'N2 · 论证结构与干扰项',
+    learner: '能读长句，但分不清「主张」与「让步」；错项说不出错在哪。',
+    entry: '先抛出常识看法，再问「作者会同意吗」，让让步与转折的必要性显形。',
+    tools: [
+      '论证四格：主張—根拠—譲歩—結論，先说这句填哪一格',
+      '转折回收：しかし／むしろ／とはいえ 之后才是真意，前面是让步',
+      '长句三步：先找谓语 → 再切修饰 → 最后补省略，写出还原后的短句',
+      '干扰项五类：範囲拡大／因果逆転／主客転倒／程度偏移／文中未出',
+    ],
+    trapNames: ['範囲拡大', '因果逆転', '主客転倒', '程度偏移', '文中未出'],
+    register: '可以用「前提／让步／结论」这类术语，但每个术语后面必须接一句白话。',
+    sample: 'この文は主張ではなく、譲歩です。だから後ろに「しかし」が来る。譲歩を主張と読んでしまうと、真意が正反対になります。',
+  },
+  n1: {
+    band: 'n1',
+    label: 'N1 · 立场与语气',
+    learner: '句子读得太顺，把字面当立场；选项都「像对的」，分不出程度差。',
+    entry: '用一个日常现象开场，把它和作者的判断并置：「这句听起来像在夸，其实在降温。」',
+    tools: [
+      '立场尺度：给关键句标 ＋／－／± 与强度 1–3，并指出依据词',
+      '限定词与删词测试：すべて／多くの／必ずしも／おそらく／にすぎない／とは限らない —— 删掉再读，看结论是否从稳妥变绝对',
+      '婉曲双栏：字面义 vs 实际义，用上下文反证（「～ではないか」多为委婉主张）',
+      '隐含前提：问「这个主张要成立，必须先承认什么」，必要时用反证法',
+      '多文本统合：B 对 A 是补充、修正还是对立，三列对照',
+    ],
+    trapNames: ['範囲拡大（すべて）', '程度偏移', '主客転倒', '因果逆転', '文中未出'],
+    register: '允许抽象，但每抽象一步必须落回原文一个具体的词；少用「总之」，多指出限定。',
+    sample: 'ここは「にすぎない」。つまり、筆者は評価を下げているんです。友だちの料理に「食べられないことはない」と言うのと同じで、褒める形で距離を置いている。',
+  },
+  toefl: {
+    band: 'toefl',
+    label: 'TOEFL · 段落功能与同义替换',
+    learner: '能读懂大意，但选项改写一多就认不出对应；推断题容易过度。',
+    entry: '先问「作者为什么要提这个例子」，把修辞目的摆到前面，再回到句子。',
+    tools: [
+      '段落功能：claim／evidence／concession／counter-argument，一句一格',
+      '同义替换对照：选项与原文的改写一一对上，指不出对应就不能选',
+      '修辞目的：举例、对比、让步各自服务什么，先答目的再答内容',
+      '干扰项：过度推断／绝对化／偷换概念／答非所问',
+    ],
+    trapNames: ['过度推断', '绝对化（all/never）', '偷换概念', '答非所问', '文中未提'],
+    register: '英文旁白用口语短句；术语（claim/evidence）出现时立刻用一句白话解释。',
+    sample: 'Notice the word "some", not "all". Option B says "all students agree", so that single word already kills it. The author only suggests.',
+  },
+  ielts: {
+    band: 'ielts',
+    label: 'IELTS · 定位与改写',
+    learner: '能定位，但 T/F/NG 分不清；标题题爱选细节。',
+    entry: '先圈题干里的限定条件（时间、范围、比较对象），再回原文找对应。',
+    tools: [
+      '题干条件圈定：时间／范围／比较对象，先圈后找',
+      '同义替换链：题干词 → 原文词，一条链指出来',
+      'T/F/NG 判据：原文明确反对=F，原文没提=NG，别用常识补',
+      '标题题：看全段功能，不看某一句细节',
+    ],
+    trapNames: ['用常识代替原文（NG 误判为 T）', '范围扩大', '比较对象错位', '细节代替主旨'],
+    register: '旁白简洁，一步一个动作；避免长定语从句。',
+    sample: 'The passage never says this. It is not false — simply not given. If you need your own common sense to make it true, the answer is NG.',
+  },
+  cet: {
+    band: 'cet',
+    label: '四六级 · 定位与排除',
+    learner: '词汇量够，但长句切不开；选项爱选「看起来很对」的。',
+    entry: '先问「这道题问的是整篇还是某一段」，把范围定死再找。',
+    tools: [
+      '范围先定：全文题／段落题／细节题，方法不同',
+      '长句切分：主干＋修饰，先划掉插入语',
+      '同义替换对照：选项词与原文词一一对应',
+      '干扰项：范围扩大／偷换主体／因果倒置／文中未提',
+    ],
+    trapNames: ['范围扩大', '偷换主体', '因果倒置', '文中未提'],
+    register: '旁白用完整英文句，长句先给主干再接修饰；一镜至少两句话；语速稳，不赶。',
+    sample: 'Cross out the parenthetical first. The main clause is just "the research shows", and now option C matches it word for word.',
+  },
+  kaoyan: {
+    band: 'kaoyan',
+    label: '考研 · 长难句与作者态度',
+    learner: '长难句能硬读，但作者态度题常凭感觉；例证题容易答成细节。',
+    entry: '先问「作者站哪一边」，再处理句子结构，避免读完不知道立场。',
+    tools: [
+      '长难句：找谓语 → 切从句 → 补省略，先写主干再翻译',
+      '态度词：fortunately／alas／arguably 这类词定调',
+      '例证题：先答「例子证明什么」，再回细节',
+      '干扰项：过度推断／张冠李戴／绝对化',
+    ],
+    trapNames: ['过度推断', '张冠李戴', '绝对化', '答非所问'],
+    register: '术语可用，但要立刻白话化；语速稳，长句拆成两三个短句说。',
+    sample: 'Look at "fortunately". The author has already told you his attitude through that one adverb, so you do not have to guess.',
+  },
+  topik: {
+    band: 'topik',
+    label: 'TOPIK · 连接词与敬语层级',
+    learner: '词认识，但连接词逻辑与敬语对象常混；指代追丢。',
+    entry: '先问「前后两句是什么关系」，把连接词的作用摆出来。',
+    tools: [
+      '连接词逻辑：그러나（逆）／따라서（因果）／즉（换言）／반면（对比）',
+      '敬语层级：谁对谁说话，决定动词形态与距离感',
+      '指代追踪：이것／그것／저것 指哪一句',
+      '选项回填：放回原文，标一致／矛盾／未提',
+    ],
+    trapNames: ['连接关系判反', '敬语对象错', '指代错', '文中未提'],
+    register: '短句；术语少；用「先看连接词」这类动作句组织。',
+    sample: '먼저 연결어를 보세요. "그러나"가 있으니 앞뒤는 반대입니다. 반대로 읽으면 정답이 정반대가 됩니다.',
+  },
+  generic: {
+    band: 'generic',
+    label: '通用 · 证据与排除',
+    learner: '能读大意，但说不清依据句；错项靠感觉排除。',
+    entry: '先问「如果只能留一句原文当证据，你留哪句」，把注意力压到证据上。',
+    tools: [
+      '证据句：每题指出一句原文，并说明为什么不是相邻句',
+      '句法拆解：主干＋修饰，先划掉插入成分',
+      '选项对照：选项与原文逐词对应，指不出对应就不选',
+      '干扰项：范围扩大／因果倒置／主体错位／文中未提',
+    ],
+    trapNames: ['范围扩大', '因果倒置', '主体错位', '文中未提'],
+    register: '短句、口语；术语出现即解释。',
+    sample: 'Find the one sentence that proves it. Everything else is noise. If no single sentence can carry the answer, the option is simply too broad.',
+  },
+};
+
+/** 从计划的 target_label / exam_id 推断级别；拿不到就按语种给中间档 */
+export function resolveLevelProfile(params: {
+  language: Language;
+  examLabel?: string | null;
+  examId?: string | null;
+}): LevelProfile {
+  const label = (params.examLabel ?? '').trim();
+  const exam = (params.examId ?? '').trim().toLowerCase();
+
+  const jlpt = label.match(/N\s*([1-5])/i);
+  if (jlpt) return PROFILES[`n${jlpt[1]}` as LevelBand];
+  if (/topik/i.test(label) || exam === 'topik') return PROFILES.topik;
+  if (/托福|toefl/i.test(label) || exam === 'toefl') return PROFILES.toefl;
+  if (/雅思|ielts/i.test(label) || exam === 'ielts') return PROFILES.ielts;
+  if (/六级|四级|cet/i.test(label) || exam === 'cet') return PROFILES.cet;
+  if (/考研|kaoyan/i.test(label)) return PROFILES.kaoyan;
+
+  // 没有级别信息时按语种给一个中间档：日语按 N3（结构问题最常见），英语按四六级
+  if (params.language === 'ja') return PROFILES.n3;
+  if (params.language === 'ko') return PROFILES.topik;
+  return PROFILES.cet;
+}
+
+// --------------------------------------------------------------- 提示词拼装
+
+const LANG_NAME: Record<Language, string> = { en: 'English', ja: '日本語', ko: '한국어' };
+
+function lengthUnit(language: Language): string {
+  return language === 'en' ? 'words' : 'characters';
+}
+
+function shotPlan(plan: DepthPlan): string {
+  if (plan.id === 'short') {
+    return `cover, then for EACH question in order: question -> passage -> answer; at most ${plan.grammarShots} "grammar" shot in the whole video (only if one structure blocks everything); finally one takeaway.`;
+  }
+  if (plan.id === 'medium') {
+    return `cover, then for EACH question in order: question -> passage -> eliminate -> answer -> point; at most ${plan.grammarShots} "grammar" shots in the whole video (put one right after the passage it explains); finally one takeaway.`;
+  }
+  return `cover, then for EACH question in order: question -> passage -> grammar (only when the sentence's structure is the real obstacle) -> eliminate -> answer -> point, plus ONE extra point shot for the 1st and 2nd question only if it adds a genuinely different angle; at most ${plan.grammarShots} grammar shots in the whole video; finally one takeaway.`;
+}
+
+/** 单镜字数下限：以 shotFloor 为基准，按「这一镜要干几件事」伸缩，且不越过上限 */
+function kindFloor(plan: DepthPlan, factor: number): number {
+  return Math.min(plan.charCap, Math.max(18, Math.round(plan.shotFloor * factor)));
+}
+
+/**
+ * 密度示范：一段「合格」的旁白长什么样。
+ *
+ * 只给规则不给样子，模型会写成电文体（「ここが根拠。声が『相次いだ』。」）——
+ * 语法全对、信息全在，但那是答案卡，不是讲课。这一段是长度与质感的锚点。
+ */
+const DENSITY_SAMPLE: Record<Language, string> = {
+  ja: '「すべて」に注目してください。本文は「多くの人が」としか言っていません。範囲を広げた瞬間、この選択肢はもう終わりです。',
+  en: 'Watch the word "many". The passage never says "all". The moment an option widens the scope, it is already dead.',
+  ko: '「모든」를 보세요. 본문은 「많은 사람이」라고만 합니다. 범위를 넓히는 순간 그 선지는 이미 틀린 것입니다.',
+};
+
+/**
+ * 生成「教学法 + 长度档位」这一段提示词。
+ * 注意：它会被拼在 system prompt 里，每个 token 都要付钱，所以只写能改变输出的规则，
+ * 不写「你要认真」「你是专家」这类没有约束力的鼓励。
+ */
+export function buildPedagogyPrompt(
+  profile: LevelProfile,
+  plan: DepthPlan,
+  language: Language,
+): string {
+  const unit = lengthUnit(language);
+  const target = LANG_NAME[language] ?? 'English';
+  const [charsLow, charsHigh] = plan.charsPerQuestion;
+  const f = (factor: number) => kindFloor(plan, factor);
+
+  return `TEACHING BAR (this is what separates you from a solution manual)
+You are a master teacher giving one student a private lesson, not a narrator reading an answer key.
+Success = after this video the student can solve the NEXT question of the same type alone.
+Every question must leave the student with ONE reusable move, not a memorised answer.
+Speak in full sentences, the way a teacher talks. Never telegram style: "ここが根拠。声が相次いだ。" is a note, not a lesson.
+
+THE SEVEN BEATS — each beat is one shot; each beat says what must be SPOKEN in it
+1. HOOK ("question", >= ${f(0.9)} ${unit}): (a) open on a concrete scene or the wrong intuition most students have; (b) name in one sentence what the question is really testing; (c) tell them what to hunt for while reading. Never read the prompt aloud.
+2. LOCATE ("passage", >= ${f(1)} ${unit}): (a) point at the exact word ("look at this に"); (b) read the clause around it; (c) say why the sentence above is NOT the proof. The neighbour check is mandatory.
+3. DISMANTLE ("grammar", >= ${f(1.3)} ${unit}): (a) quote the surface form; (b) use two LEVEL TOOLS by name; (c) swap it and show what changes — one concrete contrast, not a definition.
+4. ELIMINATE ("eliminate", >= ${f(1.2)} ${unit}): kill at least two options. For each: (a) name the trap from TRAP NAMES; (b) quote the betraying word; (c) say what the student probably thought. Never "this one feels wrong".
+5. RESOLVE ("answer", >= ${f(1)} ${unit}): (a) quote the evidence word-for-word; (b) line the correct option up against it, word by word; (c) one sentence on why nothing else fits. Add no new information.
+6. TRANSFER ("point", >= ${f(0.6)} ${unit}): (a) the first move for next time; (b) the trigger word to watch for; (c) when NOT to use it.
+7. ANCHOR ("takeaway", exactly ONE for the whole video, at the very end): one line they could repeat from memory. Short. No summary of everything. Do not add a takeaway after each question.
+
+LEVEL PLAYBOOK — ${profile.label}
+Learner: ${profile.learner}
+Open with: ${profile.entry}
+Use these tools (name them when you use them):
+${profile.tools.map((tool, i) => `  ${i + 1}. ${tool}`).join('\n')}
+When eliminating, the only allowed trap names are: ${profile.trapNames.join(' / ')}.
+Register: ${profile.register}
+Voice reference (match this tone in ${target}): ${profile.sample}
+
+SCHOLARLY TOUCH (引经据典) — allowed and encouraged, but never invented
+Allowed: the grammar point's typical use in other real contexts at this level; genuinely existing idioms / 四字熟語 / 慣用句; kanji-morpheme logic; cultural background that explains the wording (e.g. why Japanese hedges with ～ではないか).
+Forbidden: invented quotations, invented authors or sources ("夏目漱石曾说过…"), invented exam years or statistics, invented dictionary definitions.
+If unsure, say "many textbooks treat this as…" instead of fabricating a source.
+Dose: at most ONE scholarly reference per question, and only if it shortens the explanation. It must earn its seconds.
+
+VOICE & RHYTHM (make it alive)
+- Talk, don't read. Contractions, short sentences, occasional "you" and "we".
+- Ask a real question every 2–3 sentences, then answer it yourself ("So why に and not で? Because…").
+- Use one analogy per question for anything abstract, drawn from daily life, not from grammar terminology.
+- Vary rhythm: after a dense sentence, drop one very short sentence ("That's the whole trick.").
+- Banned filler: "首先/其次/接下来我们来看/综上所述", "这道题的答案是" repeated in every shot, "让我们". Banned: reading the prompt twice.
+
+LENGTH PLAN — ${plan.label} (${plan.id})
+- HARD FLOOR: each question's narration must total >= ${charsLow} ${unit}. A question under the floor is a solution key, not a lesson — add the move you skipped.
+- CEILING: stop at ${charsHigh} ${unit} per question. Over the ceiling, cut the weakest beat instead of adding another shot; the student's attention is the scarce resource, not your token budget.
+- Per shot: ${plan.shotFloor}–${plan.charCap} ${unit}. Content shots (question / passage / grammar / eliminate / answer) never go below ${plan.shotFloor}; "point" may be shorter; "cover" <= 30; "takeaway" <= 35.
+- Shot plan: ${shotPlan(plan)}
+- Captions are Chinese and may be shorter than narration, but must carry the same logic (not a summary label).
+- COUNT BEFORE YOU ANSWER: add up the narration ${unit} per question. If it is short, the missing part is a BEAT, not words — add the move you skipped (the wrong intuition, the neighbour check, the betraying word, the trigger word). Never pad by restating the prompt.
+- If the material is short and the budget is not used up, go deeper on the evidence sentence.
+
+DENSITY REFERENCE (this is the length and texture required, in ${target}) — one "eliminate" shot
+${DENSITY_SAMPLE[language]}`;
+}
+
+// --------------------------------------------------------------- 成本预估
+
+export interface DepthEstimate {
+  id: ExplainDepth;
+  label: string;
+  blurb: string;
+  shots: number;
+  /** 成片时长（秒）：这是学生要看的长度 */
+  secLow: number;
+  secHigh: number;
+  /** 生成等待（秒）：大模型写脚本 + 配音 + 组装，和成片时长是两件事 */
+  genSecLow: number;
+  genSecHigh: number;
+  tokenLow: number;
+  tokenHigh: number;
+}
+
+/** 旁白字符 → 秒：实测 43 字日文 ≈ 8.9 秒（rate 0.92），取 0.21 s/字；英语按词 0.42 s/词 */
+function secondsFor(chars: number, language: Language): number {
+  return language === 'en' ? chars * 1.7 : chars * 0.21;
+}
+
+/**
+ * 预估分镜数 / 时长 / token。只给量级，不承诺精确值；
+ * 校准样本：4 题 22 镜 6.7k token（旧提示词），3 题 15 镜 6.7k。
+ */
+export function estimateDepth(
+  plan: DepthPlan,
+  params: { questionCount: number; bodyChars: number; translationChars?: number; language: Language },
+): DepthEstimate {
+  const q = Math.max(1, params.questionCount);
+  // 语法镜是计划内的额外镜（最多 grammarShots 个），不占每题五镜的名额
+  const shots = plan.shotsPerQuestion * q + 2 + Math.min(plan.grammarShots, q);
+
+  const [low, high] = plan.charsPerQuestion;
+  const coverOutro = 65;
+  const secondsLow = secondsFor(low * q + coverOutro, params.language);
+  const secondsHigh = secondsFor(high * q + coverOutro, params.language);
+
+  // 提示词：系统提示（含教学法，约 1.6k）+ 正文 + 译文 + 题干 + 词汇表
+  // 系数按一次真实生成反推（标准档实测 prompt 约 2.5k），不是拍脑袋的上限
+  // 实测（标准档 19 镜、3 题、正文 324 字）：prompt 3 609，输出 9 193。
+  // 常数量级由实测反推：系统提示含教学法约 2.5k，每题题干 + 选项约 250。
+  const promptTokens =
+    2_500 +
+    params.bodyChars * 0.45 +
+    (params.translationChars ?? 0) * 0.45 +
+    q * 250 +
+    200;
+  const completionTokens = shots * plan.tokensPerShot + 300;
+  const total = promptTokens + completionTokens;
+
+  const round500 = (n: number) => Math.max(500, Math.round(n / 500) * 500);
+
+  // 生成等待：脚本约占大头，配音/组装按镜数累加。
+  // 校准样本：标准档 19 镜、输出 9 193 token，脚本段实测约 120s ≈ 76 token/s；
+  // 换线/重试会翻倍，所以取 55 偏保守，让区间上界覆盖坏情况。
+  const scriptSeconds = 35 + completionTokens / 55 + promptTokens / 300;
+  const speechSeconds = shots * 2.5;
+  const genBase = scriptSeconds + speechSeconds;
+
+  return {
+    id: plan.id,
+    label: plan.label,
+    blurb: plan.blurb,
+    shots,
+    secLow: Math.max(45, Math.round(secondsLow)),
+    secHigh: Math.max(60, Math.round(secondsHigh)),
+    genSecLow: Math.round(genBase * 0.8),
+    genSecHigh: Math.round(genBase * 1.5),
+    tokenLow: round500(total * 0.85),
+    tokenHigh: round500(total * 1.2),
+  };
+}
+
+export function estimateAllDepths(params: {
+  questionCount: number;
+  bodyChars: number;
+  translationChars?: number;
+  language: Language;
+}): DepthEstimate[] {
+  return DEPTH_IDS.map((id) => estimateDepth(DEPTH_PLANS[id], params));
+}

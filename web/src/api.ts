@@ -15,6 +15,9 @@ import type {
   MaterialSummary,
   MaterialsResponse,
   MaterialUploadResponse,
+  ListeningMaterial,
+  ListeningMaterialUploadResponse,
+  ListeningMaterialsResponse,
   SettingsResponse,
   Stats,
   ExamCalendar,
@@ -34,10 +37,27 @@ import type {
   AuthConfig,
   AuthSession,
   AuthUser,
+  AsrSettingsView,
+  AsrPoolKey,
+  AsrPingResult,
+  LocalAsrStatus,
+  TranscribeResult,
+  ClaimTableCount,
   QrPollResponse,
   QrStartResponse,
+  RegisterInput,
+  RegisterResponse,
   TokenResponse,
   AuthProviderId,
+  AuthRole,
+  JlptLevel,
+  ExplainVideoLike,
+  ExplainDepth,
+  ExplainDepthEstimate,
+  ExplainEstimateResponse,
+  ExplainCoachMode,
+  ExplainExportTrack,
+  ExplainVideoSummary,
 } from './types';
 
 const BASE = '/api';
@@ -192,6 +212,37 @@ export const api = {
       0,
     ),
 
+  authRegister: (input: RegisterInput) =>
+    request<RegisterResponse>(
+      '/auth/register',
+      { method: 'POST', body: JSON.stringify(input) },
+      0,
+    ),
+
+  authUpdateMe: (patch: { displayName?: string; avatarUrl?: string | null }) =>
+    request<{ user: AuthUser }>(
+      '/auth/me',
+      { method: 'PATCH', body: JSON.stringify(patch) },
+      0,
+    ),
+
+  authChangePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>(
+      '/auth/password',
+      { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) },
+      0,
+    ),
+
+  authGuestData: () =>
+    request<{ tables: ClaimTableCount[] }>('/auth/guest-data', {}, 0),
+
+  authClaimGuest: () =>
+    request<{ result: Array<{ table: string; moved: number }>; total: number }>(
+      '/auth/claim-guest',
+      { method: 'POST', body: '{}' },
+      0,
+    ),
+
   authLogout: () =>
     request<{ ok: boolean }>('/auth/logout', { method: 'POST', body: '{}' }, 0),
 
@@ -234,7 +285,8 @@ export const api = {
     username: string;
     password: string;
     displayName?: string;
-    role?: 'admin' | 'user';
+    role?: AuthRole;
+    jlptLevel?: JlptLevel;
   }) =>
     request<{ user: AuthUser }>(
       '/auth/admin/users',
@@ -244,11 +296,18 @@ export const api = {
 
   authAdminPatchUser: (
     id: string,
-    patch: { role?: 'admin' | 'user'; status?: 'active' | 'pending' | 'disabled'; displayName?: string },
+    patch: { role?: AuthRole; status?: 'active' | 'pending' | 'disabled'; displayName?: string },
   ) =>
     request<{ user: AuthUser }>(
       `/auth/admin/users/${encodeURIComponent(id)}`,
       { method: 'PATCH', body: JSON.stringify(patch) },
+      0,
+    ),
+
+  authAdminResetPassword: (id: string, password: string) =>
+    request<{ user: AuthUser }>(
+      `/auth/admin/users/${encodeURIComponent(id)}/password`,
+      { method: 'POST', body: JSON.stringify({ password }) },
       0,
     ),
 
@@ -382,6 +441,60 @@ export const api = {
     return (await response.json()) as MaterialUploadResponse;
   },
 
+  // ---- 听力库：服务端按账号隔离的整段音频 ----
+  listeningMaterials: (language: string) =>
+    request<ListeningMaterialsResponse>(`/listening/materials?language=${language}`),
+
+  uploadListeningMaterial: async (
+    file: File,
+    language: string,
+    options: { title?: string; durationSec?: number } = {},
+  ): Promise<ListeningMaterialUploadResponse> => {
+    const query = new URLSearchParams({
+      language,
+      name: file.name,
+      ...(options.title ? { title: options.title } : {}),
+      ...(options.durationSec ? { durationSec: String(options.durationSec) } : {}),
+    });
+    const response = await fetchWithAuth(`${BASE}/listening/materials?${query.toString()}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: file,
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: { message?: string; code?: string } }
+        | null;
+      throw new ApiError(
+        payload?.error?.message ?? `上传失败（${response.status}）`,
+        response.status,
+        payload?.error?.code ?? 'UPLOAD_FAILED',
+      );
+    }
+    return (await response.json()) as ListeningMaterialUploadResponse;
+  },
+
+  /** 播放器不能自带 Authorization 头，先带鉴权取回文件字节再生成临时对象 URL */
+  downloadListeningMaterial: async (id: string): Promise<Blob> => {
+    const response = await fetchWithAuth(`${BASE}/listening/materials/${encodeURIComponent(id)}/file`, {});
+    if (!response.ok) throw new ApiError(`读取音频失败（${response.status}）`, response.status, 'FETCH_FAILED');
+    return response.blob();
+  },
+
+  renameListeningMaterial: (id: string, title: string) =>
+    request<{ material: ListeningMaterial }>(
+      `/listening/materials/${encodeURIComponent(id)}`,
+      { method: 'PATCH', body: JSON.stringify({ title }) },
+      0,
+    ),
+
+  deleteListeningMaterial: (id: string) =>
+    request<{ ok: boolean }>(
+      `/listening/materials/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+      0,
+    ),
+
   activateMaterial: (id: string, active: boolean) =>
     request<{ ok: boolean; active: boolean }>(
       `/materials/${id}/activate`,
@@ -399,6 +512,94 @@ export const api = {
     ),
 
   settings: () => request<SettingsResponse>('/settings'),
+
+  /** 兼容旧版单线路设置入口（新界面走 /settings/asr/keys） */
+  saveAsrSettings: (input: { baseUrl: string; model: string; apiKey?: string }) =>
+    request<{ asr: AsrSettingsView }>('/settings/asr', { method: 'PUT', body: JSON.stringify(input) }, 0),
+
+  /* ---- 语音识别号池 ---- */
+  /** 本地兜底服务的实时状态（不拉起进程） */
+  localAsrStatus: () => request<LocalAsrStatus>('/settings/asr/local', {}, 0),
+  /** 手动启动本地兜底服务 */
+  startLocalAsr: () => request<LocalAsrStatus>('/settings/asr/local/start', { method: 'POST' }, 0),
+  addAsrKey: (input: {
+    label?: string;
+    baseUrl: string;
+    model: string;
+    apiKey: string;
+    persist?: boolean;
+    enabled?: boolean;
+  }) => request<{ key: AsrPoolKey; asr: AsrSettingsView }>(
+    '/settings/asr/keys',
+    { method: 'POST', body: JSON.stringify(input) },
+    0,
+  ),
+
+  updateAsrKey: (id: string, patch: {
+    label?: string;
+    baseUrl?: string;
+    model?: string;
+    apiKey?: string;
+    persist?: boolean;
+    enabled?: boolean;
+  }) => request<{ key: AsrPoolKey; asr: AsrSettingsView }>(
+    `/settings/asr/keys/${encodeURIComponent(id)}`,
+    { method: 'PUT', body: JSON.stringify(patch) },
+    0,
+  ),
+
+  deleteAsrKey: (id: string) =>
+    request<{ ok: boolean; asr: AsrSettingsView }>(
+      `/settings/asr/keys/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+      0,
+    ),
+
+  resetAsrKey: (id: string) =>
+    request<{ ok: boolean; asr: AsrSettingsView }>(
+      `/settings/asr/keys/${encodeURIComponent(id)}/reset`,
+      { method: 'POST' },
+      0,
+    ),
+
+  reorderAsrKeys: (ids: string[]) =>
+    request<{ ok: boolean; asr: AsrSettingsView }>(
+      '/settings/asr/keys/order',
+      { method: 'PUT', body: JSON.stringify({ ids }) },
+      0,
+    ),
+
+  /** 测试已保存的线路（不传 Key 时沿用其已保存的 Key） */
+  testAsrKey: (id: string) =>
+    request<AsrPingResult>(`/settings/asr/keys/${encodeURIComponent(id)}/test`, { method: 'POST' }, 0),
+
+  /** 测试表单里正在填、尚未保存的值 */
+  testAsrDraft: (input: { keyId?: string; baseUrl?: string; model?: string; apiKey?: string }) =>
+    request<AsrPingResult>('/settings/asr/test', { method: 'POST', body: JSON.stringify(input) }, 0),
+
+  /**
+   * 录音转写：把录到的音频字节发给服务端 ASR，按目标语言识别成文本。
+   * 走 fetchWithAuth（带令牌 + 401 刷新），因为 request() 会强制 json content-type。
+   */
+  transcribeAudio: async (audio: Blob, language: string, name = 'recording.webm'): Promise<TranscribeResult> => {
+    const query = new URLSearchParams({ language, name });
+    const response = await fetchWithAuth(`${BASE}/asr?${query.toString()}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: audio,
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: { message?: string; code?: string } }
+        | null;
+      throw new ApiError(
+        payload?.error?.message ?? `转写失败（${response.status}）`,
+        response.status,
+        payload?.error?.code ?? 'ASR_FAILED',
+      );
+    }
+    return (await response.json()) as TranscribeResult;
+  },
 
   saveSettings: (input: {
     baseUrl?: string;
@@ -675,6 +876,128 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ language }),
     }, 0),
+
+  // ---- 解题答疑视频（精读右栏）----
+
+  /** 进入页签先预检：命中缓存直接秒开，不创建 job、不消耗 token */
+  explainResolve: (articleId: string, depth: ExplainDepth = 'medium', coach?: ExplainCoachMode) =>
+    request<{
+      resolve: {
+        state: 'cached' | 'running' | 'none';
+        videoId?: string;
+        tokens?: { promptTokens: number; completionTokens: number; totalTokens: number };
+        job?: { id: string; stage: string; progress: number; detail: string; videoId?: string };
+        /** 缓存来自共享层（别人生成过）还是自己的副本 */
+        source?: 'shared' | 'personal';
+        hasNative?: boolean;
+        needsNative?: boolean;
+      };
+    }>(
+      `/explain-videos/resolve?articleId=${encodeURIComponent(articleId)}&depth=${depth}${coach === 'bilingual' ? '&coach=bilingual' : ''}`,
+      {},
+      0,
+    ),
+
+  /** 三档预估：服务端算好时长 / token / 是否已生成，前端只负责展示 */
+  explainEstimate: (articleId: string) =>
+    request<ExplainEstimateResponse>(
+      `/explain-videos/estimate?articleId=${encodeURIComponent(articleId)}`,
+      {},
+      0,
+    ),
+
+  explainCreate: (
+    articleId: string,
+    force = false,
+    depth: ExplainDepth = 'medium',
+    coach: ExplainCoachMode = 'target',
+  ) =>
+    request<{ job: { id: string; stage: string } }>(
+      '/explain-videos',
+      { method: 'POST', body: JSON.stringify({ articleId, force, depth, coach }) },
+      0,
+    ),
+
+  /** 只补中文讲师轨：不重跑脚本，成本约为整片重生成的 1/5 */
+  explainCoach: (videoId: string) =>
+    request<{ job: { id: string; stage: string } }>(
+      `/explain-videos/${encodeURIComponent(videoId)}/coach`,
+      { method: 'POST' },
+      0,
+    ),
+
+  /**
+   * 换音色重配：只跑 TTS，不调大模型，token 恒为 0。
+   * 不传 voice 就用当前用户在该语种「文章讲解」场景配的音色。
+   */
+  explainRevoice: (videoId: string, voice?: string) =>
+    request<{ job: { id: string; stage: string } }>(
+      `/explain-videos/${encodeURIComponent(videoId)}/revoice`,
+      { method: 'POST', body: JSON.stringify(voice ? { voice } : {}) },
+      0,
+    ),
+
+  explainJob: (jobId: string) =>
+    request<{
+      job: {
+        id: string;
+        stage: string;
+        progress: number;
+        detail: string;
+        videoId?: string;
+        error?: string;
+        tokens?: { promptTokens: number; completionTokens: number; totalTokens: number };
+        cacheHit?: boolean;
+        cacheSource?: 'shared' | 'personal';
+        coach?: ExplainCoachMode;
+        coachOnly?: boolean;
+        /** 换音色重配任务（0 token，只跑 TTS） */
+        revoiceOnly?: boolean;
+        voice?: string;
+      };
+    }>(`/explain-videos/jobs/${encodeURIComponent(jobId)}`, {}, 0),
+
+  explainCancelJob: (jobId: string) =>
+    request<{ ok: boolean }>(`/explain-videos/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }, 0),
+
+  explainList: (articleId: string) =>
+    request<{ videos: ExplainVideoSummary[] }>(
+      `/explain-videos?articleId=${encodeURIComponent(articleId)}`,
+      {},
+      0,
+    ),
+
+  explainGet: (videoId: string) =>
+    request<{ video: ExplainVideoLike }>(`/explain-videos/${encodeURIComponent(videoId)}`, {}, 0),
+
+  explainSaveTranscript: (videoId: string, video: ExplainVideoLike) =>
+    request<{ video: ExplainVideoLike }>(`/explain-videos/${encodeURIComponent(videoId)}/transcript`, {
+      method: 'PUT',
+      body: JSON.stringify({ video }),
+    }, 0),
+
+  /** 导出 MP4：按音轨分文件（原文 / 中文讲师 / 双语双音轨） */
+  explainExport: (videoId: string, track: ExplainExportTrack = 'target') =>
+    request<{ url: string; track: ExplainExportTrack }>(
+      `/explain-videos/${encodeURIComponent(videoId)}/export`,
+      { method: 'POST', body: JSON.stringify({ track }) },
+      0,
+    ),
+
+  /** 导出文件的直链（<a download> 用，鉴权走 cookie/头由浏览器带） */
+  explainExportUrl: (videoId: string, track: ExplainExportTrack = 'target') =>
+    `/api/explain-videos/${encodeURIComponent(videoId)}/export/file?track=${track}`,
+
+  /** 分段音频带鉴权 fetch 成 blob URL（<audio> 不能自带 Authorization 头） */
+  explainSegmentBlob: async (videoId: string, index: number, track: 'target' | 'native' = 'target'): Promise<string> => {
+    const query = track === 'native' ? '?track=zh' : '';
+    const response = await fetchWithAuth(
+      `/api/explain-videos/${encodeURIComponent(videoId)}/seg/${index}${query}`,
+      {},
+    );
+    if (!response.ok) throw new ApiError(`分段音频加载失败（${response.status}）`, response.status, 'SEGMENT_FAILED');
+    return URL.createObjectURL(await response.blob());
+  },
 
   /** 云端音色合成：返回可直接塞给 <audio> 的 blob URL，用完请 URL.revokeObjectURL */
   synthesizeVoice: async (id: string, text: string, language: string, rate?: number): Promise<string> => {

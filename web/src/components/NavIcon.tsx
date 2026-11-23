@@ -8,7 +8,10 @@ export type NavIconName =
   | 'plan'
   | 'vocab'
   | 'exam'
-  | 'settings';
+  | 'media'
+  | 'listen'
+  | 'settings'
+  | 'uikit';
 
 /**
  * 侧栏图标：全部手绘路径，不依赖任何图标库或 Unicode 字形。
@@ -125,6 +128,28 @@ function draw(name: NavIconName, grad: string) {
         </g>
       );
 
+    // 媒体播放器：播放三角 + 音频声波，高光三角为主题色
+    case 'media':
+      return (
+        <g>
+          <circle cx="12" cy="12" r="8.6" opacity="0.9" />
+          <path d="M10.1 8.3l5.1 3.7-5.1 3.7z" fill={grad} stroke="none" />
+          <path d="M5.4 9.2v5.6M18.6 9.2v5.6" stroke={grad} strokeWidth="1.5" opacity="0.75" />
+        </g>
+      );
+
+    // 听力素材：头戴耳机，耳罩用主题色高光
+    case 'listen':
+      return (
+        <g>
+          <path d="M5.2 13.4v-1.2a6.8 6.8 0 0 1 13.6 0v1.2" />
+          <rect x="3.7" y="12.6" width="4.1" height="6.8" rx="2" />
+          <rect x="16.2" y="12.6" width="4.1" height="6.8" rx="2" />
+          <rect x="4.3" y="13.4" width="2.9" height="5.2" rx="1.5" fill={grad} stroke="none" />
+          <rect x="16.8" y="13.4" width="2.9" height="5.2" rx="1.5" fill={grad} stroke="none" />
+        </g>
+      );
+
     // 设置：iOS 控制条三滑杆，中间滑块为主题色高光件
     case 'settings':
       return (
@@ -133,6 +158,20 @@ function draw(name: NavIconName, grad: string) {
           <circle cx="9" cy="7.5" r="2.45" fill="#fff" fillOpacity="0.92" />
           <circle cx="15" cy="12" r="2.45" fill={grad} stroke="none" />
           <circle cx="10.6" cy="16.5" r="2.45" fill="#fff" fillOpacity="0.92" />
+        </g>
+      );
+
+    // UI 组件库：三块玻璃控件（输入框/开关/分段），高光为主题色
+    case 'uikit':
+      return (
+        <g>
+          <rect x="3.4" y="4.6" width="17.2" height="5.2" rx="2.4" />
+          <path d="M6.2 7.2h8" opacity="0.7" />
+          <circle cx="18" cy="7.2" r="1.1" fill={grad} stroke="none" />
+          <rect x="3.4" y="11.4" width="17.2" height="5.2" rx="2.6" />
+          <rect x="4.6" y="12.6" width="8.4" height="2.8" rx="1.4" fill={grad} stroke="none" opacity="0.85" />
+          <circle cx="17.6" cy="14" r="1.5" fill="#fff" fillOpacity="0.92" />
+          <path d="M4.4 20.2h15.2" stroke={grad} strokeWidth="1.7" strokeLinecap="round" />
         </g>
       );
 

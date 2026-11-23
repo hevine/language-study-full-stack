@@ -1,8 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
+import { Area } from '@waiyubaodian/ui-kit';
 import { Banner, CheckMark, PlayIcon, StopIcon } from '../components/ui';
+import type { MediaPaneHandle } from '../player/MediaPane';
 import type { ExamItem, ExamPaper, ExamSectionKey, ExamStage } from '../types';
+
+// SDK 内联 WASM 体积大，听力媒体面板按需加载（audioUrl 为空时完全不加载）
+const MediaPane = lazy(() => import('../player/MediaPane'));
 import { useVoicePlayer } from '../hooks/useVoicePlayer';
 
 const KEYS = ['A', 'B', 'C', 'D', 'E', 'F'];
@@ -64,9 +69,16 @@ export default function ExamTake() {
   const stageDeadline = useRef<number>(0);
   const initialized = useRef(false);
   const listeningVoice = useVoicePlayer('listening');
-  /** 用 ref 拿最新的 stop，避免把取卷 / 交卷回调的依赖搅乱 */
-  const stopVoiceRef = useRef<() => void>(() => {});
-  stopVoiceRef.current = listeningVoice.stop;
+  /** 真人音频播放器句柄（audioUrl 分支），用于精确控制两遍限制 */
+  const mediaRef = useRef<MediaPaneHandle>(null);
+  /** 同时停掉 TTS 与真人媒体，换题 / 交卷 / 卸载统一走这里 */
+  const stopAllAudio = useCallback(() => {
+    listeningVoice.stop();
+    mediaRef.current?.stop();
+  }, [listeningVoice]);
+  /** 供不需要重建的 effect / 回调引用最新 stopAllAudio */
+  const stopAllRef = useRef<() => void>(stopAllAudio);
+  stopAllRef.current = stopAllAudio;
 
   // 取卷 + 立刻开始计时（服务端同时记下开始时间）
   useEffect(() => {
@@ -87,7 +99,7 @@ export default function ExamTake() {
       });
     return () => {
       alive = false;
-      stopVoiceRef.current();
+      stopAllRef.current();
     };
   }, [paperId]);
 
@@ -162,7 +174,7 @@ export default function ExamTake() {
       submitted.current = true;
       setSubmitting(true);
       try {
-        stopVoiceRef.current();
+        stopAllRef.current();
         const limit = stages.reduce((sum, block) => sum + block.minutes, 0) * 60;
         const seconds = Math.max(0, Math.round((Date.now() - (startedAt.current || Date.now())) / 1000));
         const result = await api.examSubmit(attemptId, answers, Math.min(seconds, limit || seconds), writing);
@@ -228,7 +240,7 @@ export default function ExamTake() {
         return;
       }
       if (playing) {
-        listeningVoice.stop();
+        stopAllAudio();
         setPlaying(false);
         return;
       }
@@ -238,13 +250,31 @@ export default function ExamTake() {
       setPlays((prev) => ({ ...prev, [item.idx]: (prev[item.idx] ?? 0) + 1 }));
       listeningVoice.speak(text, 'exam-audio', () => setPlaying(false));
     },
-    [paper, playing, listeningVoice],
+    [paper, playing, listeningVoice, stopAllAudio],
   );
 
-  // 换题时停掉正在播的语音
+  /** 真人音频：与 TTS 共用"最多两遍"计数；点播放才计数，ended 时复位 */
+  const playMedia = useCallback(
+    (item: ExamItem) => {
+      if (playing) {
+        mediaRef.current?.stop();
+        setPlaying(false);
+        return;
+      }
+      // lazy 组件尚未挂载时不要计数，避免白白消耗一次播放机会
+      const handle = mediaRef.current;
+      if (!handle) return;
+      setPlaying(true);
+      setPlays((prev) => ({ ...prev, [item.idx]: (prev[item.idx] ?? 0) + 1 }));
+      void handle.play();
+    },
+    [playing],
+  );
+
+  // 换题时停掉正在播的语音 / 真人媒体
   useEffect(() => {
     if (playing) {
-      listeningVoice.stop();
+      stopAllAudio();
       setPlaying(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -402,7 +432,31 @@ export default function ExamTake() {
                 </span>
               </div>
               {current.audioUrl ? (
-                <audio controls src={current.audioUrl} className="exam-audio-el" />
+                <>
+                  {/* 真人音频：MediaPane bare 形态，宿主自绘按钮以精确控制"两遍限制" */}
+                  <Suspense fallback={<div className="hint">正在加载播放器…</div>}>
+                    <MediaPane
+                      key={current.idx}
+                      ref={mediaRef}
+                      id={`exam-audio-${current.idx}`}
+                      src={current.audioUrl}
+                      mediaType="audio"
+                      sourceKind="url"
+                      variant="bare"
+                      canvasStyle={{ width: '100%', height: 96, borderRadius: 10 }}
+                      onEnded={() => setPlaying(false)}
+                    />
+                  </Suspense>
+                  <button
+                    className={`btn btn-sm exam-audio-btn${playing ? ' playing' : ''}`}
+                    style={{ marginTop: 8 }}
+                    onClick={() => playMedia(current)}
+                    disabled={!canPlay && !playing}
+                  >
+                    {playing ? <StopIcon size={14} /> : <PlayIcon size={14} />}
+                    {playing ? '停止播放' : usedPlays === 0 ? '播放录音' : '再听一遍'}
+                  </button>
+                </>
               ) : (
                 <button
                   className={`btn btn-sm exam-audio-btn${playing ? ' playing' : ''}`}
@@ -415,9 +469,11 @@ export default function ExamTake() {
               )}
               <p className="exam-audio-tip">
                 录音只播放、不显示原文；交卷后可在解析里对照听力原文。
-                {listeningVoice.currentVoice ? ` · 当前音色「${listeningVoice.currentVoice.name}」` : ''}
+                {!current.audioUrl && listeningVoice.currentVoice
+                  ? ` · 当前音色「${listeningVoice.currentVoice.name}」`
+                  : ''}
               </p>
-              {listeningVoice.error ? (
+              {!current.audioUrl && listeningVoice.error ? (
                 <div className="banner banner-danger" style={{ marginTop: 8 }}>
                   {listeningVoice.error}
                 </div>
@@ -429,12 +485,13 @@ export default function ExamTake() {
 
           {isWriting ? (
             <div className="exam-writing">
-              <textarea
-                className="exam-writing-input"
+              <Area
+                textareaClassName="exam-writing-input"
                 value={text}
-                onChange={(event) => setText(event.target.value)}
+                onChange={setText}
                 placeholder={current.minWords > 0 ? `请用目标语言作答，不少于 ${current.minWords} 字/词` : '请在此作答'}
                 rows={12}
+                block
               />
               <div className="exam-writing-foot">
                 <span className="small muted">

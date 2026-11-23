@@ -319,9 +319,13 @@ export function useSpeech(lang: string) {
       };
       utterance.onend = () => settle(true);
       utterance.onerror = (event) => {
-        // canceled / interrupted 是主动停止触发的，不算异常
+        // canceled / interrupted 是主动停止触发的，不算异常。
+        // 关键：必须走 settle(false) 而不是自己减 inflight——
+        //  1) settled 守卫避免紧接着补发的 onend 二次递减、提前触发 onDone；
+        //  2) 外部 speechSynthesis.cancel() 时 cancelledRef 仍为 false，
+        //     settle 会把 playing 复位并回调 onDone，避免 ExamTake 停止按钮卡死。
         if (event.error === 'canceled' || event.error === 'interrupted') {
-          inflightRef.current = Math.max(0, inflightRef.current - 1);
+          settle(false);
           return;
         }
         settle(true);

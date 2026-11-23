@@ -33,6 +33,8 @@ export interface LlmConfig {
   usedKeyId?: string | null;
   /** 本次调用累计消耗的 token（含重试与降级重发，按平台回的 usage 累加） */
   usage?: TokenUsage;
+  /** 这条线路上次失败的信息（来自号池持久化），长输出调用据此把它排到最后 */
+  lastError?: string | null;
 }
 
 export interface TokenUsage {
@@ -91,6 +93,23 @@ export function markJsonModeUnsupported(baseUrl: string, model: string): void {
   jsonModeUnsupported.add(configKey(baseUrl, model));
 }
 
+/**
+ * 「思考吃满预算」的线路。
+ *
+ * 解题视频脚本一次要吐 6–10k token，而思考型模型会把 max_tokens 全花在推理上，
+ * 正文一个字都不留——这不是坏线路（聊天场景它还很好用），是「干不了长输出」。
+ * 学一次就把它在长输出调用里排到最后，否则每次生成都要白等两分钟才换线。
+ */
+const reasoningHungry = new Set<string>();
+
+/**
+ * 长输出调用的门槛。凡是「要模型连续吐几千字」的请求都算：
+ * 解题视频脚本（5–11k）、母语讲稿（3k 上下）。聊天 / 评分 / 解释单词远低于它。
+ * 门槛从 6000 降到 4000 再到 3000 的教训：门槛定高了，小预算任务会绕过排序，
+ * 一样要白等思考型模型两分钟才换线。
+ */
+const LONG_OUTPUT_TOKENS = 3_000;
+
 /** 上次成功的线路：下次优先从它开始，避免每次都去撞已经坏掉的第一条 */
 let lastGoodKeyId: string | null | undefined;
 
@@ -132,6 +151,7 @@ function fromCandidate(candidate: PoolCandidate): LlmConfig {
     jsonMode: wantsJsonMode(candidate.baseUrl, candidate.model, candidate.providerId),
     keyId: candidate.keyId,
     label: candidate.label,
+    lastError: candidate.lastError ?? null,
     pool: true,
   };
 }
@@ -164,12 +184,19 @@ interface ChatMessage {
 }
 
 /** 单次请求 token 预算的天花板：截断后的加预算重试都以此为止，避免超出平台上限 */
-const MAX_TOKEN_BUDGET = 10_000;
+// 精讲档 23 镜 × 600 token 需要 ~14k 输出；上限跟着最大档走，别让截断重试封顶在 12k
+const MAX_TOKEN_BUDGET = 16_000;
 
 interface ChatOptions {
   temperature?: number;
   maxTokens?: number;
   retries?: number;
+  /**
+   * 单次上游请求超时（毫秒）。默认取线路配置（90s）。
+   * 解题视频的「精讲」档一次要吐 20+ 镜的 JSON，90s 会被误杀成超时，
+   * 所以调用方能按输出体量把预算放大。
+   */
+  timeoutMs?: number;
   /**
    * chatJson 专用的回传口：记录这次是不是靠本地修复救回来的，
    * 调用方（AI 加练）用它决定要不要在界面上标注「格式已自动修复」。
@@ -180,6 +207,12 @@ interface ChatOptions {
     /** 最终成功响应的 finish_reason === 'length'：正文可能在 JSON 中途被截断 */
     truncated?: boolean;
   };
+  /**
+   * chatJson 专用的「最后一道本地抢救」：严格解析与 repairJson 都失败、
+   * 或解析出来结构不合 schema 时，把原始文本交给调用方自己捞能用的部分。
+   * 返回 null 表示救不了（此时才值得再花一次调用让模型重写）。
+   */
+  tolerant?: (raw: string) => unknown | null;
 }
 
 interface AttemptFailure {
@@ -333,54 +366,64 @@ async function callOnce(
 ): Promise<{ text: string; truncated: boolean }> {
   const retries = withBackoff ? options.retries ?? 2 : 0;
   let lastError: unknown;
+  // 超时预算要透传给 requestOnce；它是唯一会造副本的选项，
+  // 所以要在 finally 里把用量搬回原对象 —— 否则外层读 config.usage 永远是空（成本面板会归零）
+  const cfg = options.timeoutMs
+    ? { ...config, timeoutMs: Math.max(config.timeoutMs, options.timeoutMs) }
+    : config;
 
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
-    try {
-      // 配置里的 jsonMode 只是「想不想用」，这里再叠一层「试过发现用不了」的记忆
-      const jsonMode = config.jsonMode && !jsonModeUnsupported.has(configKey(config.baseUrl, config.model));
-      let result: Awaited<ReturnType<typeof requestOnce>>;
+  try {
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
       try {
-        result = await requestOnce(config, messages, options, jsonMode);
+        // 配置里的 jsonMode 只是「想不想用」，这里再叠一层「试过发现用不了」的记忆
+        const jsonMode = config.jsonMode && !jsonModeUnsupported.has(configKey(config.baseUrl, config.model));
+        let result: Awaited<ReturnType<typeof requestOnce>>;
+        try {
+          result = await requestOnce(cfg, messages, options, jsonMode);
+        } catch (err) {
+          // 「思考型模型」会把 max_tokens 花在推理上，正文被截断成空。
+          // 这种情况翻倍预算再试一次，通常就能拿到正文（只多花一次调用，且只发生在截断时）。
+          const budget = options.maxTokens ?? 2400;
+          if (!(err as { truncated?: boolean }).truncated || budget >= MAX_TOKEN_BUDGET) throw err;
+          const bumped = Math.min(MAX_TOKEN_BUDGET, Math.max(6000, budget * 2));
+          logger.warn('llm output truncated by max_tokens, retrying with bigger budget', { from: budget, to: bumped });
+          result = await requestOnce(cfg, messages, { ...options, maxTokens: bumped }, jsonMode);
+        }
+
+        // 智谱、混元、魔搭等平台对 response_format 支持不一：报参数错误就退到纯提示词模式
+        if (!result.ok && result.status === 400 && jsonMode && JSON_MODE_COMPLAINT.test(result.body)) {
+          logger.warn('llm json mode unsupported, retrying without response_format', {
+            baseUrl: config.baseUrl,
+            model: config.model,
+          });
+          markJsonModeUnsupported(config.baseUrl, config.model);
+          result = await requestOnce(cfg, messages, options, false);
+        }
+
+        if (!result.ok) {
+          const info = classifyLlmFailure(result.status, result.body);
+          const err = new UpstreamError(`大模型接口返回 ${result.status}`, {
+            status: result.status,
+            snippet: redactSecret(result.body.slice(0, 300)),
+          });
+          (err as UpstreamError & { retryable?: boolean; failure?: FailureInfo }).retryable = info.switchable;
+          (err as UpstreamError & { failure?: FailureInfo }).failure = info;
+          throw err;
+        }
+
+        return { text: result.content, truncated: result.finishReason === 'length' };
       } catch (err) {
-        // 「思考型模型」会把 max_tokens 花在推理上，正文被截断成空。
-        // 这种情况翻倍预算再试一次，通常就能拿到正文（只多花一次调用，且只发生在截断时）。
-        const budget = options.maxTokens ?? 2400;
-        if (!(err as { truncated?: boolean }).truncated || budget >= MAX_TOKEN_BUDGET) throw err;
-        const bumped = Math.min(MAX_TOKEN_BUDGET, Math.max(6000, budget * 2));
-        logger.warn('llm output truncated by max_tokens, retrying with bigger budget', { from: budget, to: bumped });
-        result = await requestOnce(config, messages, { ...options, maxTokens: bumped }, jsonMode);
+        lastError = err;
+        const retryable = (err as { retryable?: boolean }).retryable ?? false;
+        if (!retryable || attempt === retries) break;
+        const backoff = 600 * 2 ** attempt;
+        logger.warn('llm retry', { attempt: attempt + 1, backoff, message: (err as Error).message });
+        await sleep(backoff);
       }
-
-      // 智谱、混元、魔搭等平台对 response_format 支持不一：报参数错误就退到纯提示词模式
-      if (!result.ok && result.status === 400 && jsonMode && JSON_MODE_COMPLAINT.test(result.body)) {
-        logger.warn('llm json mode unsupported, retrying without response_format', {
-          baseUrl: config.baseUrl,
-          model: config.model,
-        });
-        markJsonModeUnsupported(config.baseUrl, config.model);
-        result = await requestOnce(config, messages, options, false);
-      }
-
-      if (!result.ok) {
-        const info = classifyLlmFailure(result.status, result.body);
-        const err = new UpstreamError(`大模型接口返回 ${result.status}`, {
-          status: result.status,
-          snippet: redactSecret(result.body.slice(0, 300)),
-        });
-        (err as UpstreamError & { retryable?: boolean; failure?: FailureInfo }).retryable = info.switchable;
-        (err as UpstreamError & { failure?: FailureInfo }).failure = info;
-        throw err;
-      }
-
-      return { text: result.content, truncated: result.finishReason === 'length' };
-    } catch (err) {
-      lastError = err;
-      const retryable = (err as { retryable?: boolean }).retryable ?? false;
-      if (!retryable || attempt === retries) break;
-      const backoff = 600 * 2 ** attempt;
-      logger.warn('llm retry', { attempt: attempt + 1, backoff, message: (err as Error).message });
-      await sleep(backoff);
     }
+  } finally {
+    // 副本上记的用量搬回去；config.usage 已存在时两者本就是同一个引用，赋值是空操作
+    if (cfg !== config && cfg.usage) config.usage = cfg.usage;
   }
 
   if (lastError instanceof UpstreamError) {
@@ -445,6 +488,21 @@ function summarizeFailures(failures: AttemptFailure[], total: number): UpstreamE
 }
 
 /**
+ * 把某条线路的用量并入外层 config。
+ *
+ * 池模式下每条候选线路都有自己的 config 对象，用量记在各自身上；
+ * 换线路时前面那条已经花掉的 token 不能丢——用户看到的成本必须是真的花了多少。
+ */
+function absorbUsage(target: LlmConfig, source: LlmConfig): void {
+  if (source === target || !source.usage) return;
+  const acc = target.usage ?? (target.usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 });
+  acc.promptTokens += source.usage.promptTokens;
+  acc.completionTokens += source.usage.completionTokens;
+  acc.totalTokens += source.usage.totalTokens;
+  source.usage = undefined;
+}
+
+/**
  * 调用 OpenAI 兼容接口并返回原始文本。
  *
  * 号池模式（config.pool）下：按优先级逐条线路尝试，失败即记录冷却并换下一条；
@@ -462,10 +520,21 @@ export async function chat(
     });
   }
 
-  const rotate = order.length > 1;
+  // 长输出调用（解题视频脚本 6–10k token）最怕思考型模型：一次空输出白等两分钟。
+  // 判据有两个：本次进程里学到的、号池里持久化的上次失败（重启后仍然有效）；
+  // 若全部都被判为不适合，仍然照原顺序试，不能因为记忆而拒绝服务。
+  const hungry = (line: { config: LlmConfig }): boolean =>
+    reasoningHungry.has(configKey(line.config.baseUrl, line.config.model)) ||
+    /思考占满|只有思考/.test(line.config.lastError ?? '');
+  const longOutput = (options.maxTokens ?? 2_400) >= LONG_OUTPUT_TOKENS;
+  const queue = longOutput
+    ? [...order.filter((line) => !hungry(line)), ...order.filter((line) => hungry(line))]
+    : order;
+
+  const rotate = queue.length > 1;
   const failures: AttemptFailure[] = [];
 
-  for (const line of order) {
+  for (const line of queue) {
     try {
       const { text, truncated } = await callOnce(line.config, messages, options, !rotate);
       // 用回传口带出截断标记，不改变 chat() 的 string 返回类型，其他调用方零改动
@@ -475,8 +544,8 @@ export async function chat(
       config.usedModel = line.config.model;
       config.usedLabel = line.label;
       config.usedKeyId = line.keyId;
-      // 用量记在外层 config 上，调用方直接读 config.usage 就能展示
-      config.usage = line.config.usage;
+      // 用量并入外层 config（含前面几条失败线路已花掉的 token），调用方直接读 config.usage
+      absorbUsage(config, line.config);
       return text;
     } catch (err) {
       const info =
@@ -489,6 +558,19 @@ export async function chat(
         } satisfies FailureInfo);
 
       const detail = (err as { details?: { status?: number; snippet?: string } }).details;
+      // 这条线路可能已经把 prompt（甚至部分输出）算进额度了，先收上来再换线
+      absorbUsage(config, line.config);
+      // 思考把预算吃光：内容全在 reasoning 里，正文为空。记住它不适合长输出，下次排到最后
+      if (longOutput && /思考占满|只有思考/.test(info.message)) {
+        const key = configKey(line.config.baseUrl, line.config.model);
+        if (!reasoningHungry.has(key)) {
+          reasoningHungry.add(key);
+          logger.warn('llm line marked reasoning-hungry, deprioritised for long output', {
+            label: line.label,
+            model: line.config.model,
+          });
+        }
+      }
       markPoolFailure(line.keyId, info);
       failures.push({ label: line.label, info, status: detail?.status, snippet: detail?.snippet, raw: err });
       logger.warn('llm line failed, trying next', {
@@ -501,7 +583,7 @@ export async function chat(
     }
   }
 
-  if (failures.length === 1 && order.length === 1) {
+  if (failures.length === 1 && queue.length === 1) {
     // 只有一条线路时把上游原始报错原样抛出去，用户更容易定位
     const only = failures[0];
     if (only.raw && (only.raw as { emptyOutput?: boolean }).emptyOutput) throw only.raw;
@@ -512,7 +594,7 @@ export async function chat(
     });
   }
 
-  throw summarizeFailures(failures, order.length);
+  throw summarizeFailures(failures, queue.length);
 }
 
 function stripFence(raw: string): string {
@@ -547,19 +629,50 @@ export async function chatJson<T>(
   const parse = (raw: string): { ok: true; data: T } | { ok: false; reason: string } => {
     const text = stripFence(raw);
     let json: unknown;
+
+    /** 交给调用方的抢救器；救不动就返回 null，让上层决定是否再花一次调用 */
+    const salvage = (): unknown | null => {
+      if (!options.tolerant) return null;
+      try {
+        const value = options.tolerant(text);
+        if (value !== null && value !== undefined) {
+          meta.localRepaired = true;
+          logger.info('llm json salvaged from raw output');
+          return value;
+        }
+      } catch (err) {
+        logger.warn('llm tolerant parser threw', { err: (err as Error).message });
+      }
+      return null;
+    };
+
     try {
       json = JSON.parse(text);
     } catch {
       // 先本地修：围栏、客套话、尾逗号、中文引号、截断……都不用再花一次调用
       const repaired = repairJson(text);
-      if (!repaired.ok) {
-        return { ok: false, reason: '返回内容不是合法 JSON（本地修复也没救回来）' };
+      if (repaired.ok) {
+        meta.localRepaired = true;
+        logger.info('llm json locally repaired', { stage: repaired.stage });
+        json = repaired.value;
+      } else {
+        const salvaged = salvage();
+        if (salvaged === null) {
+          return { ok: false, reason: '返回内容不是合法 JSON（本地修复也没救回来）' };
+        }
+        json = salvaged;
       }
-      meta.localRepaired = true;
-      logger.info('llm json locally repaired', { stage: repaired.stage });
-      json = repaired.value;
     }
-    const result = parser.safeParse(json);
+
+    let result = parser.safeParse(json);
+    if (!result.success) {
+      // 结构不合要求：再让抢救器按「对象粒度」捞一遍，捞回来的部分往往就够用了
+      const salvaged = salvage();
+      if (salvaged !== null) {
+        const again = parser.safeParse(salvaged);
+        if (again.success) result = again;
+      }
+    }
     if (!result.success) {
       const detail = (result.error?.issues ?? [])
         .slice(0, 6)
@@ -606,7 +719,9 @@ export async function chatJson<T>(
     const err = new UpstreamError('大模型输出被 max_tokens 截断，重试后仍未拿到完整 JSON', {
       reason: secondParsed.reason,
     });
-    (err as UpstreamError & { truncatedOutput?: boolean }).truncatedOutput = true;
+    const marked = err as UpstreamError & { truncatedOutput?: boolean; rawOutput?: string };
+    marked.truncatedOutput = true;
+    marked.rawOutput = second;
     throw err;
   }
 
@@ -628,7 +743,10 @@ export async function chatJson<T>(
   const repaired = parse(repair);
   if (repaired.ok) return repaired.data;
 
-  throw new UpstreamError('大模型返回的 JSON 无法解析', { reason: repaired.reason });
+  const failure = new UpstreamError('大模型返回的 JSON 无法解析', { reason: repaired.reason });
+  // 把最后一次原文回传给调用方：它可能能按对象粒度救回一部分，不必让用户重试
+  (failure as UpstreamError & { rawOutput?: string }).rawOutput = repair;
+  throw failure;
 }
 
 export type LlmErrorKind = 'timeout' | 'truncated' | 'config' | 'other';

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { Banner } from './ui';
-import Dropdown from './Dropdown';
+import { Dropdown } from '@waiyubaodian/ui-kit';
 import type { Language, MaterialSummary } from '../types';
 
 const ACCEPT = '.pdf,.epub,.docx,.txt,.md,.html';

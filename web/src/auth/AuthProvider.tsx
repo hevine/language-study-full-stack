@@ -17,7 +17,7 @@ import {
   type ReactNode,
 } from 'react';
 import { api, AUTH_LOST_EVENT, refreshSilently, setAccessToken } from '../api';
-import type { AuthConfig, AuthUser, TokenResponse } from '../types';
+import type { AuthConfig, AuthUser, RegisterInput, RegisterResponse, TokenResponse } from '../types';
 
 export interface AuthState {
   config: AuthConfig | null;
@@ -27,6 +27,8 @@ export interface AuthState {
   error: string | null;
   applyTokens: (data: TokenResponse) => void;
   loginWithPassword: (username: string, password: string) => Promise<void>;
+  /** 返回 true 表示注册成功并已登录；返回 false 表示 pending（待审核，未登录） */
+  register: (input: RegisterInput) => Promise<boolean>;
   loginWithTicket: (ticketId: string, ticketSecret: string) => Promise<void>;
   logout: () => Promise<void>;
   reloadConfig: () => Promise<void>;
@@ -41,6 +43,7 @@ const AuthCtx = createContext<AuthState>({
   error: null,
   applyTokens: () => {},
   loginWithPassword: noop,
+  register: async () => false,
   loginWithTicket: noop,
   logout: noop,
   reloadConfig: noop,
@@ -100,6 +103,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [applyTokens],
   );
 
+  const register = useCallback(
+    async (input: RegisterInput): Promise<boolean> => {
+      const data: RegisterResponse = await api.authRegister(input);
+      if ('pending' in data) {
+        // 待审核：不发令牌，保持游客态，由页面给出提示
+        return false;
+      }
+      applyTokens(data);
+      return true;
+    },
+    [applyTokens],
+  );
+
   const loginWithTicket = useCallback(
     async (ticketId: string, ticketSecret: string) => {
       applyTokens(await api.authQrExchange(ticketId, ticketSecret));
@@ -126,11 +142,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       error,
       applyTokens,
       loginWithPassword,
+      register,
       loginWithTicket,
       logout,
       reloadConfig,
     }),
-    [config, user, ready, error, applyTokens, loginWithPassword, loginWithTicket, logout, reloadConfig],
+    [config, user, ready, error, applyTokens, loginWithPassword, register, loginWithTicket, logout, reloadConfig],
   );
 
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;

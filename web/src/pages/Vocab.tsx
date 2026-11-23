@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
+import { Field } from '@waiyubaodian/ui-kit';
 import { Banner, EmptyState, Loading, SectionCard } from '../components/ui';
 import { useApp } from '../store';
 import type { LexiconResponse, VocabWord } from '../types';
@@ -393,12 +394,13 @@ export default function VocabPage() {
         <SectionCard
           title={`我的词汇（${words.length}）`}
           extra={
-            <input
-              className="input"
+            <Field
               style={{ maxWidth: 220 }}
               placeholder={copy.searchAll}
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={setQuery}
+              leading="⌕"
+              aria-label={copy.searchAll}
             />
           }
         >
@@ -446,12 +448,13 @@ export default function VocabPage() {
           <SectionCard
             title={copy.libTitle}
             extra={
-              <input
-                className="input"
+              <Field
                 style={{ maxWidth: 220 }}
                 placeholder={copy.searchLib}
                 value={lexQuery}
-                onChange={(event) => setLexQuery(event.target.value)}
+                onChange={setLexQuery}
+                leading="⌕"
+                aria-label={copy.searchLib}
               />
             }
           >

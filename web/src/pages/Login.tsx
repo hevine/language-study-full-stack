@@ -1,12 +1,22 @@
 /**
- * 登录 / 账号中心。
- * 未登录：微信、钉钉扫码 + 账号密码兜底；已登录：资料、渠道绑定、会话与管理端用户表。
+ * 登录 / 注册 / 账号中心。
+ * 未登录：登录、注册两个 tab（含扫码 + 账号密码）；
+ * 已登录：资料维护、渠道绑定、会话管理、游客数据认领与管理端用户表。
  */
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../api';
 import { useAuth } from '../auth/AuthProvider';
-import type { AuthProviderId, AuthSession, AuthUser } from '../types';
+import { Field, Select, type SelectOption } from '@waiyubaodian/ui-kit';
+import type {
+  AuthProviderId,
+  AuthRole,
+  AuthSession,
+  AuthUser,
+  ClaimTableCount,
+  JlptLevel,
+  PublicRegisterRole,
+} from '../types';
 
 interface StoredTicket {
   ticketId: string;
@@ -24,23 +34,56 @@ const PROVIDER_MARK: Record<AuthProviderId, string> = { wechat: '微', dingtalk:
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : '操作失败，请稍后再试');
 
+const ROLE_LABEL: Record<AuthRole, string> = {
+  admin: '管理员',
+  teacher: '教师',
+  student: '学生',
+  user: '学员',
+};
+const JLPT_LEVELS: JlptLevel[] = ['N1', 'N2', 'N3', 'N4', 'N5'];
+
+/** 与后端 assertPassword 一致：8–72 位、含字母与数字 */
+const passwordStrength = (value: string): { ok: boolean; text: string } => {
+  if (value.length === 0) return { ok: false, text: '至少 8 位' };
+  if (value.length < 8) return { ok: false, text: '至少 8 位' };
+  if (value.length > 72) return { ok: false, text: '最多 72 位' };
+  if (!/[A-Za-z]/.test(value) || !/[0-9]/.test(value)) return { ok: false, text: '需同时含字母和数字' };
+  return { ok: true, text: '强度合格' };
+};
+
 export default function Login() {
-  const { config, user, ready, loginWithPassword, loginWithTicket, logout } = useAuth();
+  const { config, user, ready, loginWithPassword, register, loginWithTicket, logout } = useAuth();
   const navigate = useNavigate();
 
-  const [username, setUsername] = useState('admin');
+  const [tab, setTab] = useState<'login' | 'register'>(() =>
+    new URLSearchParams(window.location.search).get('tab') === 'register' ? 'register' : 'login',
+  );
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<StoredTicket | null>(null);
   const [sessions, setSessions] = useState<AuthSession[]>([]);
   const [adminUsers, setAdminUsers] = useState<Array<AuthUser & { sessionCount: number }>>([]);
-  const [newUser, setNewUser] = useState({ username: '', password: '', displayName: '' });
+  const [newUser, setNewUser] = useState({
+    username: '',
+    password: '',
+    confirm: '',
+    displayName: '',
+    role: 'student' as PublicRegisterRole,
+    jlptLevel: 'N3' as JlptLevel,
+  });
+  const [profileName, setProfileName] = useState('');
+  const [pwdChange, setPwdChange] = useState({ current: '', next: '', confirm: '' });
+  const [claimPreview, setClaimPreview] = useState<ClaimTableCount[] | null>(null);
+  const [resetFor, setResetFor] = useState<{ id: string; name: string } | null>(null);
+  const [resetPassword, setResetPassword] = useState('');
 
   const isAdmin = user?.role === 'admin';
 
   const loadAccount = useCallback(async () => {
     if (!user) return;
+    setProfileName(user.displayName);
     try {
       const [sessionRes, userRes] = await Promise.all([
         api.authSessions(),
@@ -145,6 +188,131 @@ export default function Login() {
     }
   };
 
+  const submitRegister = async (event: FormEvent) => {
+    event.preventDefault();
+    setNotice(null);
+    const strength = passwordStrength(newUser.password);
+    if (!strength.ok) {
+      setNotice(`密码不合规：${strength.text}`);
+      return;
+    }
+    if (newUser.password !== newUser.confirm) {
+      setNotice('两次输入的密码不一致');
+      return;
+    }
+    if (!/^[a-zA-Z0-9._-]{3,40}$/.test(newUser.username.trim())) {
+      setNotice('用户名需为 3–40 位字母、数字或 . _ -');
+      return;
+    }
+    setBusy(true);
+    try {
+      const loggedIn = await register({
+        username: newUser.username.trim(),
+        password: newUser.password,
+        ...(newUser.displayName.trim() ? { displayName: newUser.displayName.trim() } : {}),
+        role: newUser.role,
+        ...(newUser.role === 'teacher' ? { jlptLevel: newUser.jlptLevel } : {}),
+      });
+      if (loggedIn) {
+        setNotice(null);
+        navigate('/', { replace: true });
+      } else {
+        setNotice('注册成功，账号待管理员审核通过后方可登录。');
+        setTab('login');
+      }
+    } catch (err) {
+      setNotice(errText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveProfile = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setNotice(null);
+    try {
+      await api.authUpdateMe({ displayName: profileName.trim() });
+      await loadAccount();
+      setNotice('资料已保存');
+    } catch (err) {
+      setNotice(errText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitPasswordChange = async (event: FormEvent) => {
+    event.preventDefault();
+    setNotice(null);
+    const strength = passwordStrength(pwdChange.next);
+    if (!strength.ok) {
+      setNotice(`新密码不合规：${strength.text}`);
+      return;
+    }
+    if (pwdChange.next !== pwdChange.confirm) {
+      setNotice('两次输入的新密码不一致');
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.authChangePassword(pwdChange.current, pwdChange.next);
+      setPwdChange({ current: '', next: '', confirm: '' });
+      setNotice('密码已修改，其它设备已下线');
+    } catch (err) {
+      setNotice(errText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const loadClaimPreview = async () => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const data = await api.authGuestData();
+      setClaimPreview(data.tables);
+    } catch (err) {
+      setNotice(errText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmClaim = async () => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const data = await api.authClaimGuest();
+      setClaimPreview(null);
+      setNotice(`已认领 ${data.total} 条本机数据到当前账号`);
+      // 数据归属变了，整页重拉，避免显示上一个账号的内容
+      navigate('/', { replace: true });
+    } catch (err) {
+      setNotice(errText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitReset = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!resetFor) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      await api.authAdminResetPassword(resetFor.id, resetPassword);
+      setResetFor(null);
+      setResetPassword('');
+      setNotice(`已重置 ${resetFor.name} 的密码，该用户所有设备已下线`);
+      await loadAccount();
+    } catch (err) {
+      setNotice(errText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const doLogout = async () => {
     setBusy(true);
     await logout();
@@ -173,7 +341,7 @@ export default function Login() {
         password: newUser.password,
         ...(newUser.displayName.trim() ? { displayName: newUser.displayName.trim() } : {}),
       });
-      setNewUser({ username: '', password: '', displayName: '' });
+      setNewUser({ username: '', password: '', confirm: '', displayName: '', role: 'student', jlptLevel: 'N3' });
       await loadAccount();
     } catch (err) {
       setNotice(errText(err));
@@ -205,6 +373,35 @@ export default function Login() {
 
         {!user ? (
           <>
+            <div className="auth-tabs" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === 'login'}
+                className={`auth-tab ${tab === 'login' ? 'active' : ''}`}
+                onClick={() => { setTab('login'); setNotice(null); }}
+              >
+                登录
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === 'register'}
+                className={`auth-tab ${tab === 'register' ? 'active' : ''}`}
+                onClick={() => { setTab('register'); setNotice(null); }}
+                disabled={config?.allowRegister === false}
+                title={config?.allowRegister === false ? '本站暂未开放注册' : '创建新账号'}
+              >
+                注册
+              </button>
+            </div>
+
+            {config?.allowRegister === false ? (
+              <div className="auth-tip">本站暂未开放自助注册，请联系管理员创建账号。</div>
+            ) : null}
+
+            {tab === 'login' ? (
+              <>
             {config?.required ? (
               <div className="auth-tip">本站已开启强制登录，请选择一种方式继续。</div>
             ) : (
@@ -253,25 +450,23 @@ export default function Login() {
             <div className="auth-divider"><span>或使用账号密码</span></div>
 
             <form className="auth-form" onSubmit={(event) => void submitPassword(event)}>
-              <label className="auth-field">
-                <span>账号</span>
-                <input
-                  value={username}
-                  onChange={(event) => setUsername(event.target.value)}
-                  autoComplete="username"
-                  placeholder="admin"
-                />
-              </label>
-              <label className="auth-field">
-                <span>密码</span>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  autoComplete="current-password"
-                  placeholder="请输入密码"
-                />
-              </label>
+              <Field
+                label="账号"
+                value={username}
+                onChange={setUsername}
+                autoComplete="username"
+                placeholder="admin"
+                block
+              />
+              <Field
+                label="密码"
+                type="password"
+                value={password}
+                onChange={setPassword}
+                autoComplete="current-password"
+                placeholder="请输入密码"
+                block
+              />
               <button className="btn btn-primary btn-block" disabled={busy} type="submit">
                 {busy ? '登录中…' : '登录'}
               </button>
@@ -288,6 +483,93 @@ export default function Login() {
                 以游客身份继续使用 →
               </button>
             ) : null}
+              </>
+            ) : (
+              <>
+                <div className="auth-tip">
+                  注册后拥有独立的备考空间，与其它账号数据完全隔离；游客数据可在账号中心手动认领。
+                </div>
+                <form className="auth-form" onSubmit={(event) => void submitRegister(event)}>
+                  <Field
+                    label="账号（3–40 位字母、数字或 . _ -）"
+                    value={newUser.username}
+                    onChange={(value) => setNewUser({ ...newUser, username: value })}
+                    autoComplete="username"
+                    placeholder="例如 student_01"
+                    block
+                  />
+                  <Field
+                    label="昵称（可选）"
+                    value={newUser.displayName}
+                    onChange={(value) => setNewUser({ ...newUser, displayName: value })}
+                    placeholder="留空则用账号名"
+                    block
+                  />
+                  <div className="auth-field">
+                    <span>注册身份</span>
+                    <div className="auth-role-pick">
+                      <button
+                        type="button"
+                        className={`auth-role-btn ${newUser.role === 'student' ? 'active' : ''}`}
+                        onClick={() => setNewUser({ ...newUser, role: 'student' })}
+                      >
+                        学生
+                      </button>
+                      <button
+                        type="button"
+                        className={`auth-role-btn ${newUser.role === 'teacher' ? 'active' : ''}`}
+                        onClick={() => setNewUser({ ...newUser, role: 'teacher' })}
+                      >
+                        教师
+                      </button>
+                    </div>
+                  </div>
+                  {newUser.role === 'teacher' ? (
+                    <Select<JlptLevel>
+                      label="能力等级（预留，供后续教学能力判定）"
+                      value={newUser.jlptLevel}
+                      onChange={(value) => setNewUser({ ...newUser, jlptLevel: value })}
+                      options={JLPT_LEVELS.map((level) => ({ value: level, label: level })) as SelectOption<JlptLevel>[]}
+                      block
+                    />
+                  ) : null}
+                  <Field
+                    label="密码"
+                    type="password"
+                    value={newUser.password}
+                    onChange={(value) => setNewUser({ ...newUser, password: value })}
+                    autoComplete="new-password"
+                    placeholder="8–72 位，含字母和数字"
+                    block
+                  />
+                  {newUser.password ? (
+                    <div className={`auth-strength ${passwordStrength(newUser.password).ok ? 'ok' : ''}`}>
+                      {passwordStrength(newUser.password).text}
+                    </div>
+                  ) : null}
+                  <Field
+                    label="确认密码"
+                    type="password"
+                    value={newUser.confirm}
+                    onChange={(value) => setNewUser({ ...newUser, confirm: value })}
+                    autoComplete="new-password"
+                    placeholder="再次输入密码"
+                    block
+                  />
+                  <button className="btn btn-primary btn-block" disabled={busy} type="submit">
+                    {busy ? '注册中…' : '注册并进入'}
+                  </button>
+                </form>
+                {config?.newUserStatus === 'pending' ? (
+                  <p className="hint small auth-hint">当前站点开启了注册审核，注册后需管理员启用才能登录。</p>
+                ) : null}
+                {config?.guestAllowed ? (
+                  <button className="auth-link auth-guest" onClick={() => navigate('/', { replace: true })}>
+                    以游客身份继续使用 →
+                  </button>
+                ) : null}
+              </>
+            )}
           </>
         ) : (
           <>
@@ -298,10 +580,78 @@ export default function Login() {
               <div className="auth-user-meta">
                 <strong>{user.displayName}</strong>
                 <span className="small muted">
-                  {user.role === 'admin' ? '管理员' : '学员'} · 用户 ID {user.id}
+                  {ROLE_LABEL[user.role]}
+                  {user.role === 'teacher' && user.jlptLevel ? ` · ${user.jlptLevel}` : ''}
+                  {' · '}用户 ID {user.id}
                 </span>
               </div>
             </div>
+
+            <div className="auth-section-title">个人资料</div>
+            <form className="auth-inline-form" onSubmit={(event) => void saveProfile(event)}>
+              <Field
+                placeholder="昵称"
+                value={profileName}
+                onChange={setProfileName}
+                aria-label="昵称"
+              />
+              <button className="btn" type="submit" disabled={busy}>保存昵称</button>
+            </form>
+
+            <div className="auth-section-title">修改密码</div>
+            <form className="auth-inline-form auth-form-stack" onSubmit={(event) => void submitPasswordChange(event)}>
+              <Field
+                type="password"
+                placeholder="当前密码"
+                value={pwdChange.current}
+                onChange={(value) => setPwdChange({ ...pwdChange, current: value })}
+                aria-label="当前密码"
+              />
+              <Field
+                type="password"
+                placeholder="新密码（8–72 位，含字母和数字）"
+                value={pwdChange.next}
+                onChange={(value) => setPwdChange({ ...pwdChange, next: value })}
+                aria-label="新密码"
+              />
+              <Field
+                type="password"
+                placeholder="确认新密码"
+                value={pwdChange.confirm}
+                onChange={(value) => setPwdChange({ ...pwdChange, confirm: value })}
+                aria-label="确认新密码"
+              />
+              <button className="btn" type="submit" disabled={busy}>修改密码（其它设备将下线）</button>
+            </form>
+
+            <div className="auth-section-title">认领本机游客数据</div>
+            <p className="hint small auth-hint">
+              首次使用若以游客身份录入过数据，可在此搬移到当前账号。认领不可逆，且会一并搬走本机配置的大模型 API Key。
+            </p>
+            {claimPreview ? (
+              <div className="auth-claim-preview">
+                <div className="auth-claim-list">
+                  {claimPreview.filter((item) => item.count > 0).map((item) => (
+                    <div key={item.table} className="auth-claim-row">
+                      <span>{item.table}</span><strong>{item.count} 条</strong>
+                    </div>
+                  ))}
+                  {claimPreview.every((item) => item.count === 0) ? (
+                    <p className="hint small">本机游客数据为空，无需认领。</p>
+                  ) : null}
+                </div>
+                <div className="auth-claim-actions">
+                  <button className="btn btn-primary" disabled={busy} onClick={() => void confirmClaim()}>
+                    确认认领（不可撤销）
+                  </button>
+                  <button className="btn" disabled={busy} onClick={() => setClaimPreview(null)}>取消</button>
+                </div>
+              </div>
+            ) : (
+              <button className="btn" disabled={busy} onClick={() => void loadClaimPreview()}>
+                预览可认领的数据
+              </button>
+            )}
 
             <div className="auth-section-title">已绑定的登录渠道</div>
             <div className="auth-chips">
@@ -364,7 +714,10 @@ export default function Login() {
                       {adminUsers.map((item) => (
                         <tr key={item.id}>
                           <td>{item.displayName}</td>
-                          <td>{item.role === 'admin' ? '管理员' : '学员'}</td>
+                          <td>
+                            {ROLE_LABEL[item.role]}
+                            {item.role === 'teacher' && item.jlptLevel ? ` ${item.jlptLevel}` : ''}
+                          </td>
                           <td>
                             <span className={`auth-status status-${item.status}`}>
                               {item.status === 'active' ? '正常' : item.status === 'pending' ? '待审核' : '已停用'}
@@ -379,6 +732,12 @@ export default function Login() {
                             {item.id !== user.id && item.status === 'active' ? (
                               <button className="auth-link" onClick={() => void reviewUser(item.id, 'disabled')}>停用</button>
                             ) : null}
+                            <button
+                              className="auth-link"
+                              onClick={() => { setResetFor({ id: item.id, name: item.displayName }); setResetPassword(''); setNotice(null); }}
+                            >
+                              重置密码
+                            </button>
                           </td>
                         </tr>
                       ))}
@@ -388,27 +747,48 @@ export default function Login() {
 
                 <div className="auth-section-title">新建本地账号</div>
                 <form className="auth-inline-form" onSubmit={(event) => void createUser(event)}>
-                  <input
+                  <Field
                     placeholder="用户名"
                     value={newUser.username}
-                    onChange={(event) => setNewUser({ ...newUser, username: event.target.value })}
+                    onChange={(value) => setNewUser({ ...newUser, username: value })}
+                    aria-label="用户名"
                   />
-                  <input
+                  <Field
                     placeholder="昵称（可选）"
                     value={newUser.displayName}
-                    onChange={(event) => setNewUser({ ...newUser, displayName: event.target.value })}
+                    onChange={(value) => setNewUser({ ...newUser, displayName: value })}
+                    aria-label="昵称"
                   />
-                  <input
+                  <Field
                     type="password"
                     placeholder="密码（至少 8 位）"
                     value={newUser.password}
-                    onChange={(event) => setNewUser({ ...newUser, password: event.target.value })}
+                    onChange={(value) => setNewUser({ ...newUser, password: value })}
+                    aria-label="密码"
                   />
                   <button className="btn btn-primary" type="submit" disabled={busy}>创建</button>
                 </form>
                 <p className="hint small auth-hint">
                   本地账号可立即用账号密码登录，拥有独立的备考空间；也可以在登录后到「已绑定的登录渠道」绑定微信或钉钉。
                 </p>
+
+                {resetFor ? (
+                  <div className="auth-reset-box">
+                    <div className="auth-section-title">重置「{resetFor.name}」的密码</div>
+                    <form className="auth-inline-form" onSubmit={(event) => void submitReset(event)}>
+                      <Field
+                        type="password"
+                        placeholder="新密码（至少 8 位）"
+                        value={resetPassword}
+                        onChange={setResetPassword}
+                        aria-label="新密码"
+                      />
+                      <button className="btn btn-primary" type="submit" disabled={busy}>确认重置</button>
+                      <button className="btn" type="button" onClick={() => setResetFor(null)}>取消</button>
+                    </form>
+                    <p className="hint small auth-hint">重置后该用户所有设备会立即下线，需用新密码重新登录。</p>
+                  </div>
+                ) : null}
               </>
             ) : null}
 

@@ -5,11 +5,19 @@ import LanguageSwitch from '../components/LanguageSwitch';
 import MaterialsCard from '../components/MaterialsCard';
 import ExamImportCard from '../components/ExamImportCard';
 import VoiceStudio from '../components/VoiceStudio';
+import { Field, Switch } from '@waiyubaodian/ui-kit';
 import { Banner, Loading, SectionCard } from '../components/ui';
-import Dropdown from '../components/Dropdown';
+import { Dropdown } from '@waiyubaodian/ui-kit';
 import { useApp } from '../store';
-import { THEMES, themeById } from '../theme';
-import type { LlmKeyStatus, LlmPoolKey, LlmProviderOption, SettingsResponse } from '../types';
+import { THEMES, themeById } from '@waiyubaodian/ui-kit/theme';
+import type {
+  AsrPoolKey,
+  LlmKeyStatus,
+  LlmPoolKey,
+  LlmProviderOption,
+  LocalAsrStatus,
+  SettingsResponse,
+} from '../types';
 
 type SettingsTab = 'model' | 'voice' | 'materials' | 'profile' | 'appearance' | 'privacy';
 
@@ -63,8 +71,18 @@ function hostOf(url: string): string {
   }
 }
 
-/** 冷却剩余时间用本地时钟算，服务端时间戳为基准 */
-function cooldownText(key: LlmPoolKey, now: number): string {
+/** 本地兜底线路（跑在本机的 SenseVoice）：不需要 Key，由应用按需拉起服务 */
+function isLocalLine(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+  } catch {
+    return false;
+  }
+}
+
+/** 冷却剩余时间用本地时钟算，服务端时间戳为基准（LLM / ASR 号池通用） */
+function cooldownText(key: { cooldownUntil: string | null }, now: number): string {
   if (!key.cooldownUntil) return '';
   const seconds = Math.max(0, Math.ceil((Date.parse(key.cooldownUntil) - now) / 1000));
   if (seconds <= 0) return '即将恢复';
@@ -74,6 +92,40 @@ function cooldownText(key: LlmPoolKey, now: number): string {
   const hm = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
   return `${date.getMonth() + 1}/${date.getDate()} ${hm} 恢复`;
 }
+
+/** 本地识别耗时：几百毫秒和几十秒要看起来不一样 */
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${Math.max(1, Math.round(ms))} 毫秒`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 2 : 1)} 秒`;
+  return `${Math.floor(ms / 60_000)} 分 ${Math.round((ms % 60_000) / 1000)} 秒`;
+}
+
+/** 相对时间：让「上次识别」看得出新鲜度 */
+function formatAgo(atMs: number, now: number): string {
+  const sec = Math.max(0, Math.round((now - atMs) / 1000));
+  if (sec < 10) return '刚刚';
+  if (sec < 60) return `${sec} 秒前`;
+  if (sec < 3600) return `${Math.floor(sec / 60)} 分钟前`;
+  if (sec < 86_400) return `${Math.floor(sec / 3600)} 小时前`;
+  return `${Math.floor(sec / 86_400)} 天前`;
+}
+
+function formatSpan(sec: number): string {
+  if (sec < 60) return `${sec} 秒`;
+  if (sec < 3600) return `${Math.floor(sec / 60)} 分钟`;
+  const hours = Math.floor(sec / 3600);
+  const minutes = Math.floor((sec % 3600) / 60);
+  return minutes ? `${hours} 小时 ${minutes} 分` : `${hours} 小时`;
+}
+
+const ASR_LANG_TEXT: Record<string, string> = {
+  en: '英语',
+  ja: '日语',
+  ko: '韩语',
+  zh: '中文',
+  yue: '粤语',
+  auto: '自动',
+};
 
 export default function SettingsPage() {
   const { plan, reload, language, theme, setTheme, resetTheme, autoTheme } = useApp();
@@ -135,7 +187,25 @@ export default function SettingsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editKeyValue, setEditKeyValue] = useState('');
 
+  /* 语音识别（录音转写）号池 */
+  const [asrAdding, setAsrAdding] = useState(false);
+  const [asrLabel, setAsrLabel] = useState('');
+  const [asrBaseUrl, setAsrBaseUrl] = useState('');
+  const [asrModel, setAsrModel] = useState('');
+  const [asrKey, setAsrKey] = useState('');
+  const [asrPersist, setAsrPersist] = useState(true);
+  const [savingAsr, setSavingAsr] = useState(false);
+  const [asrBusyKey, setAsrBusyKey] = useState<string | null>(null);
+  const [asrEditingId, setAsrEditingId] = useState<string | null>(null);
+  const [asrEditKey, setAsrEditKey] = useState('');
+  /* 本地兜底服务（跑在本机的 SenseVoice）的实时状态；localTick 用来手动刷新 */
+  const [localAsr, setLocalAsr] = useState<LocalAsrStatus | null>(null);
+  const [localBusy, setLocalBusy] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [localTick, setLocalTick] = useState(0);
+
   const apply = (llm: SettingsResponse['llm']) => setSettings((prev) => (prev ? { ...prev, llm } : prev));
+  const applyAsr = (asr: SettingsResponse['asr']) => setSettings((prev) => (prev ? { ...prev, asr } : prev));
 
   useEffect(() => {
     api
@@ -147,14 +217,181 @@ export default function SettingsPage() {
       .catch((err: Error) => setMessage({ tone: 'danger', text: err.message }));
   }, []);
 
+  const asr = settings?.asr;
+
+  const addAsrLine = async () => {
+    if (!asrBaseUrl.trim() || !asrKey.trim()) {
+      setMessage({ tone: 'danger', text: 'Base URL 与 API Key 都要填。' });
+      return;
+    }
+    setSavingAsr(true);
+    setMessage(null);
+    try {
+      const result = await api.addAsrKey({
+        label: asrLabel.trim() || undefined,
+        baseUrl: asrBaseUrl.trim(),
+        model: asrModel.trim() || asr?.suggestion?.model || 'whisper-1',
+        apiKey: asrKey.trim(),
+        persist: asrPersist,
+      });
+      applyAsr(result.asr);
+      setAsrLabel('');
+      setAsrBaseUrl('');
+      setAsrModel('');
+      setAsrKey('');
+      setAsrAdding(false);
+      setMessage({
+        tone: 'teal',
+        text: asrPersist
+          ? '识别线路已加入号池，Key 已加密写入本机数据库。'
+          : '线路已加入，Key 只存在内存里 —— 下次重启需要重新填写。',
+      });
+    } catch (err) {
+      setMessage({ tone: 'danger', text: (err as Error).message });
+    } finally {
+      setSavingAsr(false);
+    }
+  };
+
+  const testAsrLine = async (key: AsrPoolKey) => {
+    setAsrBusyKey(key.id);
+    setMessage(null);
+    try {
+      const result = await api.testAsrKey(key.id);
+      setMessage({
+        tone: result.ok ? 'teal' : 'danger',
+        text: result.ok
+          ? `「${key.label}」连接成功，用时 ${result.latencyMs} ms。${result.text ? ` 识别到「${result.text}」` : ''}`
+          : `「${key.label}」连接失败：${result.message}`,
+        detail: result.ok ? undefined : result.snippet,
+      });
+      await refresh();
+    } catch (err) {
+      setMessage({ tone: 'danger', text: (err as Error).message });
+    } finally {
+      setAsrBusyKey(null);
+    }
+  };
+
+  const toggleAsrLine = async (key: AsrPoolKey) => {
+    setAsrBusyKey(key.id);
+    try {
+      const result = await api.updateAsrKey(key.id, { enabled: !key.enabled });
+      applyAsr(result.asr);
+    } catch (err) {
+      setMessage({ tone: 'danger', text: (err as Error).message });
+    } finally {
+      setAsrBusyKey(null);
+    }
+  };
+
+  const resetAsrLine = async (key: AsrPoolKey) => {
+    setAsrBusyKey(key.id);
+    try {
+      const result = await api.resetAsrKey(key.id);
+      applyAsr(result.asr);
+      setMessage({ tone: 'teal', text: `「${key.label}」已解除冷却，可以重新参与轮换。` });
+    } catch (err) {
+      setMessage({ tone: 'danger', text: (err as Error).message });
+    } finally {
+      setAsrBusyKey(null);
+    }
+  };
+
+  const removeAsrLine = async (key: AsrPoolKey) => {
+    if (!window.confirm(`删除识别线路「${key.label}」？保存在本机的那份 Key 也会一起抹掉。`)) return;
+    setAsrBusyKey(key.id);
+    try {
+      const result = await api.deleteAsrKey(key.id);
+      applyAsr(result.asr);
+      setMessage({ tone: 'teal', text: '识别线路已删除。' });
+    } catch (err) {
+      setMessage({ tone: 'danger', text: (err as Error).message });
+    } finally {
+      setAsrBusyKey(null);
+    }
+  };
+
+  const replaceAsrKey = async (key: AsrPoolKey) => {
+    if (!asrEditKey.trim()) return;
+    setAsrBusyKey(key.id);
+    try {
+      const result = await api.updateAsrKey(key.id, { apiKey: asrEditKey.trim() });
+      applyAsr(result.asr);
+      setAsrEditKey('');
+      setAsrEditingId(null);
+      setMessage({ tone: 'teal', text: `「${key.label}」的 Key 已更新并重新加密保存。` });
+    } catch (err) {
+      setMessage({ tone: 'danger', text: (err as Error).message });
+    } finally {
+      setAsrBusyKey(null);
+    }
+  };
+
+  const moveAsr = async (index: number, direction: -1 | 1) => {
+    const ids = asrKeys.filter((k) => k.source === 'db').map((k) => k.id);
+    const currentId = asrKeys[index]?.id;
+    const target = ids.indexOf(currentId);
+    const swapWith = target + direction;
+    if (target < 0 || swapWith < 0 || swapWith >= ids.length) return;
+    [ids[target], ids[swapWith]] = [ids[swapWith], ids[target]];
+    try {
+      const result = await api.reorderAsrKeys(ids);
+      applyAsr(result.asr);
+    } catch (err) {
+      setMessage({ tone: 'danger', text: (err as Error).message });
+    }
+  };
+
   const keys = settings?.llm.keys ?? [];
+  const asrKeys = settings?.asr?.keys ?? [];
+  const asrCooling = asrKeys.some((key) => key.status === 'cooling' || key.status === 'exhausted' || key.status === 'invalid');
   const cooling = keys.some((key) => key.status === 'cooling' || key.status === 'exhausted' || key.status === 'invalid');
 
   useEffect(() => {
-    if (!cooling) return;
+    if (!cooling && !asrCooling) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [cooling]);
+  }, [cooling, asrCooling]);
+
+  /* 本地兜底线路：只在号池里确实有这条、且语音分组已挂载时轮询，
+     避免用户根本没用到兜底时为它发请求。 */
+  const hasLocalLine = asrKeys.some((key) => isLocalLine(key.baseUrl));
+  const voiceMounted = visited.includes('voice');
+
+  useEffect(() => {
+    if (!hasLocalLine || !voiceMounted) {
+      setLocalAsr(null);
+      return;
+    }
+    let alive = true;
+    const tick = async () => {
+      try {
+        const status = await api.localAsrStatus();
+        if (alive) setLocalAsr(status);
+      } catch {
+        // 状态读不到不该打断设置页；保留上一次的值，由界面显示「未知」
+      }
+    };
+    void tick();
+    const timer = window.setInterval(tick, 6000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [hasLocalLine, voiceMounted, localTick]);
+
+  const startLocal = async () => {
+    setLocalBusy(true);
+    setLocalError(null);
+    try {
+      setLocalAsr(await api.startLocalAsr());
+    } catch (err) {
+      setLocalError((err as Error).message);
+    } finally {
+      setLocalBusy(false);
+    }
+  };
 
   const providers = settings?.llm.providers ?? [];
   const activeProvider: LlmProviderOption | null = useMemo(
@@ -489,14 +726,14 @@ export default function SettingsPage() {
 
                       {editingId === key.id ? (
                         <div className="key-edit">
-                          <input
-                            className="input"
+                          <Field
                             type="password"
                             autoComplete="new-password"
                             spellCheck={false}
                             placeholder="粘贴新的 Key（不会显示出来）"
                             value={editKeyValue}
-                            onChange={(event) => setEditKeyValue(event.target.value)}
+                            onChange={setEditKeyValue}
+                            block
                           />
                           <button className="btn btn-sm btn-primary" onClick={() => replaceKey(key)} disabled={busy}>
                             保存
@@ -615,37 +852,33 @@ export default function SettingsPage() {
                   </div>
                 )}
 
-                <div className="field">
-                  <label>备注名</label>
-                  <input
-                    className="input"
-                    placeholder="例如：智谱 主号 / 混元 备用"
-                    value={keyLabel}
-                    onChange={(event) => setKeyLabel(event.target.value)}
-                  />
-                  <div className="hint">只用来区分，可以留空。</div>
-                </div>
+                <Field
+                  label="备注名"
+                  placeholder="例如：智谱 主号 / 混元 备用"
+                  value={keyLabel}
+                  onChange={setKeyLabel}
+                  hint="只用来区分，可以留空。"
+                  block
+                />
 
-                <div className="field">
-                  <label>Base URL</label>
-                  <input
-                    className="input"
-                    placeholder="https://open.bigmodel.cn/api/paas/v4"
-                    value={baseUrl}
-                    onChange={(event) => setBaseUrl(event.target.value)}
-                  />
-                  <div className="hint">末尾不要带 /chat/completions，系统会自动拼接。</div>
-                </div>
+                <Field
+                  label="Base URL"
+                  placeholder="https://open.bigmodel.cn/api/paas/v4"
+                  value={baseUrl}
+                  onChange={setBaseUrl}
+                  hint="末尾不要带 /chat/completions，系统会自动拼接。"
+                  block
+                />
 
                 <div className="field">
                   <label>模型名</label>
                   <div className="model-row">
-                    <input
-                      className="input"
+                    <Field
                       list="llm-model-options"
                       placeholder={activeProvider?.defaultModel || 'glm-4.7-flash'}
                       value={model}
-                      onChange={(event) => setModel(event.target.value)}
+                      onChange={setModel}
+                      block
                     />
                     <button className="btn btn-sm" onClick={fetchModels} disabled={loadingModels}>
                       {loadingModels ? '拉取中…' : '拉取列表'}
@@ -691,25 +924,22 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                <div className="field">
-                  <label>API Key</label>
-                  <input
-                    className="input"
-                    type="password"
-                    autoComplete="new-password"
-                    spellCheck={false}
-                    placeholder="sk-..."
-                    value={apiKey}
-                    onChange={(event) => setApiKey(event.target.value)}
-                  />
-                  <label className="check">
-                    <input type="checkbox" checked={!persist} onChange={(event) => setPersist(!event.target.checked)} />
-                    <span>
-                      只存在内存，不写入磁盘
-                      <span className="hint"> · 勾选后重启需要重填，适合临时借用别人的额度</span>
-                    </span>
-                  </label>
-                </div>
+                <Field
+                  label="API Key"
+                  type="password"
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  placeholder="sk-..."
+                  value={apiKey}
+                  onChange={setApiKey}
+                  block
+                />
+                <Switch
+                  checked={!persist}
+                  onChange={(checked) => setPersist(!checked)}
+                  label="只存在内存，不写入磁盘"
+                  hint="勾选后重启需要重填，适合临时借用别人的额度"
+                />
 
                 <div className="row">
                   <button className="btn btn-primary" onClick={add} disabled={saving}>
@@ -734,6 +964,286 @@ export default function SettingsPage() {
           aria-labelledby="settings-tab-voice"
           hidden={activeTab !== 'voice'}
         >
+          <SectionCard
+            title="语音识别号池（录音转写）"
+            extra={<span className="hint">从上到下依次尝试 · 失败自动切换</span>}
+          >
+            <p className="hint" style={{ marginTop: 0 }}>
+              口语练习「录音与转写」会把录音上传到下面的服务，按目标语言（英 / 日 / 韩）识别成文本。
+              需要 OpenAI 兼容的 <code>/audio/transcriptions</code> 接口；Key 只留在服务端并加密保存。
+            </p>
+
+            <div className="pool-bar">
+              <span className={`chip ${asr?.summary.ready ? 'chip-ok' : 'chip-gold'}`}>
+                {asr?.summary.ready ?? 0} 条可用
+              </span>
+              <span className="chip">共 {asr?.summary.total ?? 0} 条</span>
+              {asr?.summary.cooling ? <span className="chip chip-gold">{asr.summary.cooling} 条冷却中</span> : null}
+              <span className="hint">
+                {asr?.summary.activeLabel
+                  ? `当前优先：${asr.summary.activeLabel} · ${asr.summary.activeModel ?? ''}`
+                  : '当前没有可用线路，录音转写会提示先配置'}
+              </span>
+            </div>
+
+            {hasLocalLine ? (
+              <div className="local-asr-card">
+                <div className="local-asr-head">
+                  <span className="local-asr-title">本地兜底服务</span>
+                  {localAsr === null ? (
+                    <span className="chip">读取中…</span>
+                  ) : !localAsr.installed ? (
+                    <span className="chip chip-gold">未安装</span>
+                  ) : !localAsr.running ? (
+                    <span className="chip chip-gold">未启动</span>
+                  ) : localAsr.loading ? (
+                    <span className="chip chip-gold">模型加载中</span>
+                  ) : localAsr.loaded ? (
+                    <span className="chip chip-ok">运行中 · 已驻留</span>
+                  ) : (
+                    <span className="chip chip-ok">运行中 · 待命</span>
+                  )}
+                  <span className="hint local-asr-hint">线上线路全部不可用时才会轮到它</span>
+                  <div className="local-asr-actions">
+                    {localAsr?.installed && !localAsr.running ? (
+                      <button className="btn btn-xs" onClick={startLocal} disabled={localBusy}>
+                        {localBusy ? '启动中…' : '启动服务'}
+                      </button>
+                    ) : null}
+                    <button className="btn btn-xs" onClick={() => setLocalTick((tick) => tick + 1)} disabled={localBusy}>
+                      刷新
+                    </button>
+                  </div>
+                </div>
+
+                {localAsr?.installed ? (
+                  <div className="key-meta">
+                    {localAsr.model ? <code>{localAsr.model}</code> : null}
+                    <span>{!localAsr.device || localAsr.device === 'cpu' ? 'CPU 推理' : `${localAsr.device.toUpperCase()} 推理`}</span>
+                    {localAsr.running ? (
+                      localAsr.loaded ? (
+                        <span>
+                          模型驻留中
+                          {localAsr.idleSec != null ? ` · 闲置 ${formatSpan(localAsr.idleSec)}` : ''}
+                        </span>
+                      ) : (
+                        <span>模型未驻留 · 下次识别先加载（上次 {localAsr.loadMs ? formatElapsed(localAsr.loadMs) : '约 20-60 秒'}）</span>
+                      )
+                    ) : null}
+                    {localAsr.last ? (
+                      <>
+                        <span>
+                          上次识别 <strong>{formatElapsed(localAsr.last.elapsedMs)}</strong> ·{' '}
+                          {formatAgo(localAsr.last.atMs, Date.now())}
+                        </span>
+                        <span>
+                          {ASR_LANG_TEXT[localAsr.last.language] ?? localAsr.last.language} · {localAsr.last.chars} 字
+                          {localAsr.last.coldStart ? ' · 含冷启动' : ''}
+                        </span>
+                      </>
+                    ) : localAsr.running ? (
+                      <span>还没有识别记录</span>
+                    ) : null}
+                    {localAsr.total > 0 ? (
+                      <span>
+                        累计 {localAsr.total} 次{localAsr.failed ? ` · 失败 ${localAsr.failed}` : ''}
+                      </span>
+                    ) : null}
+                    {localAsr.running && localAsr.loaded && localAsr.idleUnloadSec ? (
+                      <span>闲置满 {Math.round(localAsr.idleUnloadSec / 60)} 分钟自动释放内存</span>
+                    ) : null}
+                    {localAsr.running && localAsr.uptimeSec != null ? (
+                      <span>已运行 {formatSpan(localAsr.uptimeSec)}</span>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {localAsr && !localAsr.installed ? (
+                  <div className="key-error">
+                    本机没找到运行环境或模型，执行 <code>npm run asr:setup</code> 装上后再回来看。
+                  </div>
+                ) : null}
+                {localAsr?.error ? <div className="key-error">{localAsr.error}</div> : null}
+                {localError ? <div className="key-error">{localError}</div> : null}
+              </div>
+            ) : null}
+
+            <div className="key-list">
+              {asrKeys.length === 0 ? (
+                <div className="key-empty">
+                  还没有识别线路。添加一个免费转录服务（如硅基流动 SenseVoiceSmall），录完音就能自动转写了。
+                </div>
+              ) : null}
+
+              {asrKeys.map((key, index) => {
+                const isEnv = key.source === 'env';
+                const busy = asrBusyKey === key.id;
+                return (
+                  <div className={`key-row${key.enabled ? '' : ' is-off'}`} key={key.id}>
+                    <div className="key-order">{index + 1}</div>
+                    <div className="key-main">
+                      <div className="key-title">
+                        <span className="key-label">{key.label}</span>
+                        <span className={`key-status is-${key.status}`}>
+                          {STATUS_TEXT[key.status]}
+                          {key.status !== 'ready' && key.status !== 'unset' && key.cooldownUntil
+                            ? ` · ${cooldownText(key, now)}`
+                            : ''}
+                        </span>
+                        {isEnv ? <span className="key-tag">环境变量 · 只读</span> : null}
+                        {isLocalLine(key.baseUrl) ? <span className="key-tag">本地 · 兜底</span> : null}
+                        {!key.persist && !isEnv ? <span className="key-tag">不落盘</span> : null}
+                        {!key.enabled ? <span className="key-tag">已停用</span> : null}
+                      </div>
+                      <div className="key-meta">
+                        <code>{key.model}</code>
+                        <span className="key-mask">
+                          {isLocalLine(key.baseUrl) ? '无需 Key' : key.maskedKey || '未填写 Key'}
+                        </span>
+                        <span>{hostOf(key.baseUrl)}</span>
+                        {key.successCount > 0 ? <span>成功 {key.successCount}</span> : null}
+                        {key.failCount > 0 ? <span>失败 {key.failCount}</span> : null}
+                      </div>
+                      {key.lastError && key.status !== 'ready' ? <div className="key-error">{key.lastError}</div> : null}
+
+                      {asrEditingId === key.id ? (
+                        <div className="key-edit">
+                          <Field
+                            type="password"
+                            autoComplete="new-password"
+                            spellCheck={false}
+                            placeholder="粘贴新的 Key（不会显示出来）"
+                            value={asrEditKey}
+                            onChange={setAsrEditKey}
+                            block
+                          />
+                          <button className="btn btn-sm btn-primary" onClick={() => replaceAsrKey(key)} disabled={busy}>
+                            保存
+                          </button>
+                          <button className="btn btn-sm btn-ghost" onClick={() => { setAsrEditingId(null); setAsrEditKey(''); }}>
+                            取消
+                          </button>
+                        </div>
+                      ) : null}
+
+                      <div className="key-actions">
+                        {!isEnv ? (
+                          <>
+                            <button className="btn btn-xs" title="上移" disabled={index === 0} onClick={() => moveAsr(index, -1)}>↑</button>
+                            <button className="btn btn-xs" title="下移" disabled={index === asrKeys.length - 1} onClick={() => moveAsr(index, 1)}>↓</button>
+                          </>
+                        ) : null}
+                        <button className="btn btn-xs" onClick={() => testAsrLine(key)} disabled={busy}>
+                          {busy ? '…' : '测试'}
+                        </button>
+                        {!isEnv ? (
+                          <>
+                            {!isLocalLine(key.baseUrl) ? (
+                              <button className="btn btn-xs" onClick={() => setAsrEditingId(key.id)}>换 Key</button>
+                            ) : null}
+                            <button className="btn btn-xs" onClick={() => resetAsrLine(key)}>恢复</button>
+                            <button className="btn btn-xs" onClick={() => toggleAsrLine(key)}>{key.enabled ? '停用' : '启用'}</button>
+                            <button className="btn btn-xs btn-danger-ghost" onClick={() => removeAsrLine(key)}>删除</button>
+                          </>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {asr?.suggestion ? (
+              <p className="hint" style={{ color: 'var(--accent)', marginTop: 10 }}>
+                推荐：{asr.suggestion.note}
+                <br />
+                Base URL：<code>{asr.suggestion.baseUrl}</code> · 模型：<code>{asr.suggestion.model}</code>
+              </p>
+            ) : null}
+
+            {!asrAdding ? (
+              <button className="btn btn-block" style={{ marginTop: 12 }} onClick={() => { setAsrAdding(true); setMessage(null); }}>
+                + 添加一条识别线路
+              </button>
+            ) : (
+              <div className="key-form">
+                <div className="key-form-head">
+                  <strong>新增识别线路</strong>
+                  <button className="btn btn-xs btn-ghost" onClick={() => setAsrAdding(false)}>收起</button>
+                </div>
+                <Field
+                  label="备注名"
+                  placeholder="例如：硅基流动 SenseVoice 主号"
+                  value={asrLabel}
+                  onChange={setAsrLabel}
+                  hint="只用来区分，可以留空。"
+                  block
+                />
+                <Field
+                  label="Base URL"
+                  placeholder={asr?.suggestion?.baseUrl ?? 'https://api.siliconflow.cn/v1'}
+                  value={asrBaseUrl}
+                  onChange={setAsrBaseUrl}
+                  hint="填到 /v1 为止，系统会自动拼接 /audio/transcriptions。"
+                  block
+                />
+                <Field
+                  label="模型"
+                  placeholder={asr?.suggestion?.model ?? 'FunAudioLLM/SenseVoiceSmall'}
+                  value={asrModel}
+                  onChange={setAsrModel}
+                  block
+                />
+                <Field
+                  label="API Key"
+                  type="password"
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  placeholder="sk-…"
+                  value={asrKey}
+                  onChange={setAsrKey}
+                  block
+                />
+                <Switch
+                  label="加密保存到本机（关闭则只在内存里，重启需重填）"
+                  checked={asrPersist}
+                  onChange={setAsrPersist}
+                />
+                <div className="row" style={{ gap: 8, marginTop: 10 }}>
+                  <button className="btn btn-primary btn-sm" onClick={() => void addAsrLine()} disabled={savingAsr}>
+                    {savingAsr ? '添加中…' : '添加到号池'}
+                  </button>
+                  <button
+                    className="btn btn-sm"
+                    disabled={savingAsr || !asrBaseUrl.trim() || !asrModel.trim() || !asrKey.trim()}
+                    onClick={() => void (async () => {
+                      setSavingAsr(true);
+                      setMessage(null);
+                      try {
+                        const result = await api.testAsrDraft({
+                          baseUrl: asrBaseUrl.trim(),
+                          model: asrModel.trim() || asr?.suggestion?.model || 'whisper-1',
+                          apiKey: asrKey.trim(),
+                        });
+                        setMessage({
+                          tone: result.ok ? 'teal' : 'danger',
+                          text: result.ok ? `连接成功，用时 ${result.latencyMs} ms。` : `连接失败：${result.message}`,
+                          detail: result.snippet,
+                        });
+                      } catch (err) {
+                        setMessage({ tone: 'danger', text: (err as Error).message });
+                      } finally {
+                        setSavingAsr(false);
+                      }
+                    })()}
+                  >
+                    测试连接
+                  </button>
+                </div>
+              </div>
+            )}
+          </SectionCard>
+
           <VoiceStudio />
         </div>
       ) : null}
@@ -767,15 +1277,13 @@ export default function SettingsPage() {
           hidden={activeTab !== 'profile'}
         >
           <SectionCard title="个人信息">
-            <div className="field">
-              <label>称呼</label>
-              <input
-                className="input"
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
-                placeholder="怎么称呼你"
-              />
-            </div>
+            <Field
+              label="称呼"
+              value={displayName}
+              onChange={setDisplayName}
+              placeholder="怎么称呼你"
+              block
+            />
             <button className="btn" onClick={saveProfile} disabled={saving}>
               保存
             </button>

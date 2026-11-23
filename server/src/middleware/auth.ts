@@ -132,6 +132,7 @@ const ALLOWED_ORIGINS = new Set<string>([
   'http://127.0.0.1:5199',
   `http://localhost:${env.port}`,
   `http://127.0.0.1:${env.port}`,
+  ...env.auth.allowedOrigins,
 ]);
 try {
   ALLOWED_ORIGINS.add(new URL(env.auth.publicBaseUrl).origin);
@@ -139,11 +140,31 @@ try {
   /* 配置成非 URL 时忽略，启动日志会另有提示 */
 }
 
+/**
+ * 开发态放行本机回环地址的任意端口：Vite 的 strictPort:false 在默认端口被占用时
+ * 会自动顺延（5199 → 5200 …），同源代理会保留浏览器原始 Origin，若白名单写死端口
+ * 就会误报「跨站请求被拒绝」。第三方站点的 Origin 不可能是回环地址，CSRF 防护不受影响；
+ * 生产态仍严格按白名单校验。
+ */
+function isLoopbackOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    const host = url.hostname;
+    return (
+      (url.protocol === 'http:' || url.protocol === 'https:') &&
+      (host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1')
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** 依赖 Cookie 的 POST 必须同源；curl 等无 Origin 的非浏览器请求放行，便于自检 */
 export function assertSameOrigin(req: Request): void {
   const origin = req.header('origin');
   if (!origin) return;
   if (ALLOWED_ORIGINS.has(origin)) return;
+  if (!env.isProd && isLoopbackOrigin(origin)) return;
   throw new ForbiddenError('跨站请求被拒绝', 'CSRF_ORIGIN');
 }
 

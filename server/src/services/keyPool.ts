@@ -59,6 +59,8 @@ export interface PoolCandidate {
   model: string;
   jsonMode: boolean;
   timeoutMs: number;
+  /** 上次失败的原始信息（持久化在 llm_keys.last_error），用于长输出任务避坑 */
+  lastError?: string | null;
   source: 'db' | 'env';
 }
 
@@ -262,6 +264,7 @@ export function poolCandidates(): PoolCandidate[] {
       model: row.model,
       jsonMode: info.jsonMode,
       timeoutMs: env.llm.timeoutMs,
+      lastError: row.last_error,
       source: 'db',
     });
   }

@@ -10,6 +10,7 @@ import {
   type AuthRole,
   type AuthUser,
   type ExternalIdentity,
+  type JlptLevel,
   type ProviderId,
   type TicketStatus,
   type UserStatus,
@@ -17,6 +18,30 @@ import {
 import { sha256 } from '../auth/crypto';
 
 const nowIso = () => new Date().toISOString();
+
+/**
+ * 「认领游客数据」要搬移的业务表白名单。
+ * 只列真正归属用户学习数据的表；刻意排除：
+ *   · profile        —— 展示资料表，新账号已有自己的一行，搬移会覆盖
+ *   · auth_* / user_identities —— 认证系统表
+ *   · users          —— 用户主表本身
+ * 新增带 user_id 的业务表时，必须同步登记到这里，否则认领会漏。
+ */
+const CLAIMABLE_TABLES = [
+  'plans',
+  'vocab_items',
+  'study_logs',
+  'materials',
+  'ai_bank_items',
+  'ai_gen_runs',
+  'exam_attempts',
+  'practice_attempts',
+  'voices',
+  'voice_assignments',
+  'voice_prefs',
+  'listening_materials',
+  'llm_keys',
+] as const;
 
 export interface UserRow {
   id: string;
@@ -27,6 +52,11 @@ export interface UserRow {
   role: AuthRole;
   status: UserStatus;
   provider_hint: string | null;
+  email: string | null;
+  phone: string | null;
+  jlpt_level: JlptLevel | null;
+  failed_attempts: number;
+  locked_until: string | null;
   last_login_at: string | null;
   created_at: string;
   updated_at: string;
@@ -101,13 +131,16 @@ export function createUser(input: {
   role?: AuthRole;
   status?: UserStatus;
   providerHint?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  jlptLevel?: JlptLevel | null;
 }): UserRow {
   const id = input.id ?? `usr_${randomUUID().replace(/-/g, '').slice(0, 20)}`;
   const now = nowIso();
   db.prepare(
     `INSERT INTO users (id, username, password_hash, display_name, avatar_url, role, status,
-                        provider_hint, last_login_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+                        provider_hint, email, phone, jlpt_level, last_login_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
   ).run(
     id,
     input.username ?? null,
@@ -117,6 +150,9 @@ export function createUser(input: {
     input.role ?? 'user',
     input.status ?? 'active',
     input.providerHint ?? null,
+    input.email ?? null,
+    input.phone ?? null,
+    input.jlptLevel ?? null,
     now,
     now,
   );
@@ -133,6 +169,11 @@ export function updateUser(
     role: AuthRole;
     status: UserStatus;
     providerHint: string | null;
+    email: string | null;
+    phone: string | null;
+    jlptLevel: JlptLevel | null;
+    failedAttempts: number;
+    lockedUntil: string | null;
   }>,
 ): UserRow | undefined {
   const columns: Record<string, string> = {
@@ -143,6 +184,11 @@ export function updateUser(
     role: 'role',
     status: 'status',
     providerHint: 'provider_hint',
+    email: 'email',
+    phone: 'phone',
+    jlptLevel: 'jlpt_level',
+    failedAttempts: 'failed_attempts',
+    lockedUntil: 'locked_until',
   };
   const sets: string[] = [];
   const values: unknown[] = [];
@@ -182,6 +228,8 @@ export function toAuthUser(row: UserRow): AuthUser {
     role: row.role,
     status: row.status,
     providerHint: row.provider_hint,
+    jlptLevel: row.jlpt_level,
+    email: row.email,
     lastLoginAt: row.last_login_at,
     createdAt: row.created_at,
     identities: listIdentities(row.id).map((item) => ({
@@ -199,6 +247,16 @@ export function ensureProfileForUser(userId: string, displayName: string): void 
      VALUES (?, ?, NULL, ?, ?)
      ON CONFLICT(user_id) DO NOTHING`,
   ).run(userId, displayName.slice(0, 40), now, now);
+}
+
+/** 改昵称时同步 profile.display_name（页面昵称读的是 profile 表） */
+export function setProfileDisplayName(userId: string, displayName: string): void {
+  ensureProfileForUser(userId, displayName);
+  db.prepare('UPDATE profile SET display_name = ?, updated_at = ? WHERE user_id = ?').run(
+    displayName.slice(0, 40),
+    nowIso(),
+    userId,
+  );
 }
 
 // ------------------------------------------------------- user_identities
@@ -287,6 +345,23 @@ export function revokeSession(id: string, replacedBy?: string): void {
     replacedBy ?? null,
     id,
   );
+}
+
+/** 改密码后撤销该用户其它所有设备会话，仅保留当前会话 */
+export function revokeOtherSessions(userId: string, currentSessionId: string): number {
+  return db
+    .prepare(
+      `UPDATE auth_sessions SET revoked_at = ?
+       WHERE user_id = ? AND id <> ? AND revoked_at IS NULL`,
+    )
+    .run(nowIso(), userId, currentSessionId).changes;
+}
+
+/** 管理员重置密码：撤销该用户全部会话，强制重新登录 */
+export function revokeAllSessions(userId: string): number {
+  return db
+    .prepare('UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL')
+    .run(nowIso(), userId).changes;
 }
 
 /** 检测到旧 refresh 被重用：整条家族链作废，这是重放检测的核心 */
@@ -500,6 +575,102 @@ export function listAudit(limit = 100): Array<{
     detail: row.detail,
     createdAt: row.created_at,
   }));
+}
+
+/** SQLite 唯一约束冲突判定（供注册转 USERNAME_TAKEN / EMAIL_TAKEN） */
+export function isUniqueViolation(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  // better-sqlite3 抛出的 SqliteError 带 code='SQLITE_CONSTRAINT_UNIQUE'；
+  // 同时兜底 message（不同版本 message 文案略有差异），避免只靠单一信号。
+  const code = String((err as { code?: unknown }).code ?? '');
+  const message = String((err as { message?: unknown }).message ?? '');
+  return (
+    code === 'SQLITE_CONSTRAINT_UNIQUE' ||
+    code === 'SQLITE_CONSTRAINT_PRIMARYKEY' ||
+    /UNIQUE constraint failed/i.test(message)
+  );
+}
+
+/** 是否还有任何用户设置了密码 —— publicAuthConfig 里 passwordEnabled 的真实语义 */
+export function countUsersWithPassword(): number {
+  return (
+    db.prepare('SELECT COUNT(*) AS n FROM users WHERE password_hash IS NOT NULL').get() as {
+      n: number;
+    }
+  ).n;
+}
+
+/** 认领预览：逐表统计 local 名下待搬移的行数，供前端二次确认展示 */
+export function countClaimable(fromUserId: string): Array<{ table: string; count: number }> {
+  return CLAIMABLE_TABLES.map((table) => ({
+    table,
+    count: (
+      db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id = ?`).get(fromUserId) as {
+        n: number;
+      }
+    ).n,
+  }));
+}
+
+/**
+ * 认领游客数据：把 fromUserId 名下的业务数据整体搬到 toUserId。
+ * 逐表 UPDATE 包在一个事务里，任一步失败整体回滚；返回各表实际搬移行数。
+ * 目标表上若与用户已有数据发生唯一键冲突（如 voice_prefs 的 (user_id,language)），
+ * 逐表 UPDATE 会抛错并回滚，调用方据此返回 409。
+ */
+export function claimUserData(
+  fromUserId: string,
+  toUserId: string,
+): Array<{ table: string; moved: number }> {
+  if (fromUserId === toUserId) return [];
+  const claim = db.transaction(() =>
+    CLAIMABLE_TABLES.map((table) => ({
+      table,
+      moved: db.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`).run(toUserId, fromUserId)
+        .changes,
+    })),
+  );
+  return claim();
+}
+
+/**
+ * 账号级失败锁定：写入一次失败，返回当前失败次数与锁定状态。
+ * threshold<=0 时关闭锁定，仅累加计数不锁。锁到期后自动清零重新计数。
+ */
+export function recordLoginFailure(
+  userId: string,
+  threshold: number,
+  lockMinutes: number,
+): { attempts: number; lockedUntil: string | null } {
+  const row = findUserById(userId);
+  if (!row) return { attempts: 0, lockedUntil: null };
+  const now = Date.now();
+  const lockedUntilMs = row.locked_until ? new Date(row.locked_until).getTime() : 0;
+  // 上一次锁定已过期：从 0 重新计
+  const base = lockedUntilMs && lockedUntilMs <= now ? 0 : row.failed_attempts;
+  const attempts = base + 1;
+  const shouldLock = threshold > 0 && attempts >= threshold;
+  const nextLockedUntil = shouldLock
+    ? new Date(now + lockMinutes * 60_000).toISOString()
+    : null;
+  updateUser(userId, {
+    failedAttempts: shouldLock ? 0 : attempts,
+    lockedUntil: nextLockedUntil,
+  });
+  return { attempts, lockedUntil: nextLockedUntil };
+}
+
+/** 登录成功 / 管理员解锁：清空失败计数与锁定 */
+export function clearLoginFailure(userId: string): void {
+  updateUser(userId, { failedAttempts: 0, lockedUntil: null });
+}
+
+/** 账号当前是否处于锁定期；返回剩余秒数（未锁返回 0） */
+export function lockedRemainingSec(userId: string): number {
+  const row = findUserById(userId);
+  if (!row?.locked_until) return 0;
+  const remain = Math.ceil((new Date(row.locked_until).getTime() - Date.now()) / 1000);
+  return remain > 0 ? remain : 0;
 }
 
 /** 管理端视图：用户 + 会话数，不回传任何哈希字段 */

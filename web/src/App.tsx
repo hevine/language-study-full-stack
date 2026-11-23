@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { api } from './api';
 import Layout from './components/Layout';
@@ -17,8 +17,13 @@ import Today from './pages/Today';
 import VocabPage from './pages/Vocab';
 import Login from './pages/Login';
 import AuthCallback from './pages/AuthCallback';
+
+// 播放器 SDK 内联了 WASM，体积较大；懒加载避免拖慢现有页面首屏
+const MediaPlayerDemo = lazy(() => import('./pages/MediaPlayerDemo'));
+const ListeningMaterial = lazy(() => import('./pages/ListeningMaterial'));
+const UIKit = lazy(() => import('./pages/UIKit'));
 import { AppCtx, pickPlanForLanguage, useApp } from './store';
-import { applyTheme, isAutoTheme, resetTheme, resolveTheme, saveTheme, type ThemeId } from './theme';
+import { applyTheme, isAutoTheme, resetTheme, resolveTheme, saveTheme, type ThemeId } from '@waiyubaodian/ui-kit/theme';
 import { useAuth } from './auth/AuthProvider';
 import { VoiceProvider } from './hooks/useVoiceSystem';
 import type { Catalog, Language, Plan } from './types';
@@ -79,6 +84,7 @@ function AppContent() {
   return (
     <Layout>
       {/* 以计划为键：切语种后整页重挂载，所有页面按新语种重新取数 */}
+      <Suspense fallback={<CenterMessage><div className="hint">正在加载…</div></CenterMessage>}>
       <Routes key={planKey}>
         <Route path="/" element={plan ? <Dashboard /> : <Navigate to="/setup" replace />} />
         <Route path="/setup" element={<Setup />} />
@@ -90,6 +96,9 @@ function AppContent() {
         <Route path="/practice" element={plan ? <PracticeHub /> : <Navigate to="/setup" replace />} />
         <Route path="/practice/:date/:taskId" element={plan ? <Practice /> : <Navigate to="/setup" replace />} />
         <Route path="/path" element={<PathPage />} />
+        <Route path="/media-player" element={<MediaPlayerDemo />} />
+        <Route path="/ui-kit" element={<UIKit />} />
+        <Route path="/listening" element={<ListeningMaterial />} />
         <Route path="/plan" element={plan ? <PlanPage /> : <Navigate to="/setup" replace />} />
         <Route path="/vocab" element={<VocabPage />} />
         <Route path="/exams" element={<ExamHub />} />
@@ -98,6 +107,7 @@ function AppContent() {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      </Suspense>
     </Layout>
   );
 }
@@ -169,8 +179,8 @@ export default function App() {
   );
 
   useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
+    applyTheme(theme, language);
+  }, [theme, language]);
 
   const setTheme = useCallback(
     (id: ThemeId) => {

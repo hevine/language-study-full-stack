@@ -18,12 +18,18 @@ export interface RepairResult {
 }
 
 /** 阶段一：剥掉围栏与前后缀，只留最外层的 { } 或 [ ] */
-function stripNoise(raw: string): string {
-  let text = raw.trim();
+export function stripNoise(raw: string): string {
+  let text = raw.replace(/^\uFEFF/, '').trim();
   // ```json ... ``` 围栏
   if (text.includes('```')) {
-    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const fenced = text.match(/```(?:json|jsonc|json5|javascript|js)?\s*([\s\S]*?)```/i);
     if (fenced) text = fenced[1].trim();
+  }
+  // 模型常先写一大段分析再给 JSON：定位到 "shots"/"scenes" 键，从它所在对象的 { 开始切
+  const anchor = text.search(/"(?:shots|scenes|storyboard|segments|sections)"\s*:/i);
+  if (anchor > 0) {
+    const brace = text.lastIndexOf('{', anchor);
+    if (brace > 0) text = text.slice(brace);
   }
   // 前后客套话：取第一个 { 或 [ 到最后一个 } 或 ]
   const firstObj = text.indexOf('{');
@@ -44,6 +50,84 @@ function dropTrailingCommas(text: string): string {
 /** 阶段三：中文引号 → 英文引号（模型爱用 “” ‘’ 当字符串定界符） */
 function normalizeQuotes(text: string): string {
   return text.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+}
+
+/** 只在字符串外部做替换：字符串里的中文标点是正文内容，动了就毁稿 */
+function mapOutsideStrings(text: string, fn: (ch: string) => string): string {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  for (const ch of text) {
+    if (escaped) {
+      out += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      out += ch;
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      out += ch;
+      continue;
+    }
+    out += inString ? ch : fn(ch);
+  }
+  return out;
+}
+
+/** 阶段四之前：中文标点当结构符号用（`，` 当逗号、`：` 当冒号、全角引号当定界符） */
+function normalizeFullWidth(text: string): string {
+  const table: Record<string, string> = {
+    '，': ',',
+    '、': ',',
+    '：': ':',
+    '；': ';',
+    '｛': '{',
+    '｝': '}',
+    '［': '[',
+    '］': ']',
+    '\u3000': ' ',
+  };
+  if (!/[，、：；｛｝［］\u3000]/.test(text)) return text;
+  return mapOutsideStrings(text, (ch) => table[ch] ?? ch);
+}
+
+/** 阶段四之前：去掉字符串外的 // 与 /* *\/ 注释（模型爱写「// 第1题」） */
+function stripComments(text: string): string {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i += 1;
+      out += '\n';
+      continue;
+    }
+    if (ch === '/' && text[i + 1] === '*') {
+      i += 2;
+      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i += 1;
+      i += 1;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
 }
 
 /** 阶段四：单引号字符串 → 双引号（只在没辙时试，风险最高） */
@@ -207,6 +291,8 @@ export function repairJson(raw: string): RepairResult {
     { name: 'as-is', apply: (t) => t },
     { name: 'trailing-commas', apply: dropTrailingCommas },
     { name: 'smart-quotes', apply: normalizeQuotes },
+    { name: 'comments', apply: stripComments },
+    { name: 'full-width', apply: normalizeFullWidth },
     { name: 'raw-controls', apply: escapeRawControls },
     { name: 'single-quotes', apply: singleToDoubleQuotes },
   ];

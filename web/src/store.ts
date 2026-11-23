@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import type { ThemeId } from './theme';
+import type { ThemeId } from '@waiyubaodian/ui-kit/theme';
 import type { Catalog, Language, Plan } from './types';
 
 export interface AppState {

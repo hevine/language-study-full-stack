@@ -42,8 +42,9 @@ export class NotFoundError extends AppError {
 }
 
 export class ConflictError extends AppError {
-  constructor(message = '操作与当前状态冲突') {
-    super(message, { code: 'CONFLICT', status: 409 });
+  /** code 作为前后端契约（如 USERNAME_TAKEN），前端按 code 分支，不按 message */
+  constructor(message = '操作与当前状态冲突', code = 'CONFLICT') {
+    super(message, { code, status: 409 });
     this.name = 'ConflictError';
   }
 }
@@ -57,8 +58,8 @@ export class UpstreamError extends AppError {
 }
 
 export class ConfigError extends AppError {
-  constructor(message = '配置缺失或无效', details?: unknown) {
-    super(message, { code: 'CONFIG_INVALID', status: 503, details });
+  constructor(message = '配置缺失或无效', details?: unknown, expose = false) {
+    super(message, { code: 'CONFIG_INVALID', status: 503, details, expose });
     this.name = 'ConfigError';
   }
 }

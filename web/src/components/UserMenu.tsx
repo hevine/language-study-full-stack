@@ -12,7 +12,10 @@ export default function UserMenu() {
           <span className="auth-mini-dot" /> 游客模式
         </div>
         <div className="auth-mini-sub">数据保存在本机，不与其他账号共享</div>
-        <Link className="auth-mini-btn" to="/login">登录 / 注册</Link>
+        <div className="auth-mini-actions">
+          <Link className="auth-mini-btn" to="/login">登录</Link>
+          <Link className="auth-mini-btn" to="/login?tab=register">注册</Link>
+        </div>
       </div>
     );
   }

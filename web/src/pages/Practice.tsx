@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { api } from '../api';
 import CreativeLoading from '../components/CreativeLoading';
+import { Area, AudioPlayer } from '@waiyubaodian/ui-kit';
 import { Banner, Ring, SectionCard, TokenIcon } from '../components/ui';
 import { useSpeaking } from '../hooks/useSpeaking';
 import { formatCn, todayISO, useApp } from '../store';
@@ -40,7 +41,7 @@ export default function Practice() {
     routedKind === 'speak' || routedKind === 'write' ? routedKind : null,
   );
 
-  const appliedRef = useRef('');
+  const asrAppliedRef = useRef('');
   const resultRef = useRef<HTMLDivElement | null>(null);
 
   // 回看历史记录时，语言以接口返回的为准（可能来自别的计划）
@@ -94,19 +95,13 @@ export default function Practice() {
     return () => window.clearInterval(id);
   }, [timing]);
 
-  // 把语音识别的增量结果追加到作答框
+  // 服务端 ASR 转写稿（按目标语言）到达后写进作答框；用 ref 去重，避免重复追加
   useEffect(() => {
-    const final = speaking.finalText;
-    if (final.length <= appliedRef.current.length) {
-      if (final.length === 0) appliedRef.current = '';
-      return;
-    }
-    const delta = final.slice(appliedRef.current.length).trim();
-    appliedRef.current = final;
-    if (delta) {
-      setText((prev) => (prev ? `${prev.replace(/\s+$/, '')} ${delta}` : delta));
-    }
-  }, [speaking.finalText]);
+    const result = speaking.transcript;
+    if (!result || result === asrAppliedRef.current) return;
+    asrAppliedRef.current = result;
+    setText((prev) => (prev ? `${prev.replace(/\s+$/, '')} ${result}` : result));
+  }, [speaking.transcript]);
 
   const submit = async () => {
     if (!data || submitting) return;
@@ -261,17 +256,19 @@ export default function Practice() {
                 <button
                   className={`btn ${speaking.active ? 'btn-primary' : ''}`}
                   onClick={() => (speaking.active ? speaking.stop() : void speaking.start())}
-                  disabled={submitting}
+                  disabled={submitting || speaking.transcribing}
                 >
                   {speaking.active ? '■ 停止录音' : '● 开始说（自动转写）'}
                 </button>
-                {!speaking.recognitionSupported ? (
-                  <span className="hint">当前浏览器不支持语音转写，请在下方直接输入你说的内容。</span>
+                {speaking.transcribing ? (
+                  <span className="hint">正在识别录音…</span>
+                ) : !speaking.recorderSupported ? (
+                  <span className="hint">当前浏览器不支持录音，请在下方直接输入你说的内容。</span>
                 ) : (
-                  <span className="hint">需允许麦克风；转写稿可在下方手动修改。</span>
+                  <span className="hint">需允许麦克风；停止后自动按目标语言转写，转写稿可在下方修改。</span>
                 )}
                 {speaking.audioUrl ? (
-                  <audio controls src={speaking.audioUrl} style={{ height: 34 }} />
+                  <AudioPlayer src={speaking.audioUrl} label="录音回放" />
                 ) : null}
                 {speaking.error ? <span className="hint" style={{ color: 'var(--danger)' }}>{speaking.error}</span> : null}
               </div>
@@ -293,19 +290,20 @@ export default function Practice() {
               </div>
             )}
 
-            <textarea
-              className={`practice-input${data.language === 'ja' ? ' jp' : ''}`}
+            <Area
+              textareaClassName={`practice-input${data.language === 'ja' ? ' jp' : ''}`}
               value={text}
-              onChange={(event) => setText(event.target.value)}
+              onChange={setText}
               placeholder={
                 isSpeak
-                  ? '点击「开始说」自动转写；也可以直接把你说的话打在这里。'
+                  ? '点击「开始说」录音，停止后自动按目标语言转写；也可以直接在这里输入。'
                   : data.language === 'ja'
                     ? '在这里写作（日本語）…'
                     : 'Type your response here…'
               }
               rows={isSpeak ? 8 : 14}
               disabled={submitting}
+              block
             />
 
             <div className="row" style={{ marginTop: 10 }}>
@@ -315,7 +313,7 @@ export default function Practice() {
                 {!isSpeak ? ` · 段落 ${text.split(/\n\s*\n/).filter((item) => item.trim()).length}` : ''}
               </span>
               <span className="spacer" />
-              <button className="btn btn-sm btn-ghost" onClick={() => setText('')} disabled={submitting}>
+              <button className="btn btn-sm btn-ghost" onClick={() => { setText(''); asrAppliedRef.current = ''; }} disabled={submitting}>
                 清空
               </button>
               <button className="btn btn-primary" onClick={submit} disabled={submitting || text.trim().length < 20}>
@@ -327,7 +325,12 @@ export default function Practice() {
               </button>
             </div>
 
-            {speaking.interim ? <div className="interim">…{speaking.interim}</div> : null}
+            {speaking.finalText || speaking.interim ? (
+              <div className="interim">
+                {speaking.finalText}{speaking.interim ? `…${speaking.interim}` : ''}
+                <span className="hint"> · 实时预览，转写稿以录音识别结果为准</span>
+              </div>
+            ) : null}
             {submitting ? (
               <div style={{ marginTop: 12 }}>
                 <CreativeLoading compact variant="grade" kind={prompt.kind} />
@@ -339,6 +342,7 @@ export default function Practice() {
             {viewing ? <ResultPanel attempt={viewing} language={data.language} onRetry={() => {
               setViewing(null);
               setText('');
+              asrAppliedRef.current = '';
               setSeconds(0);
               speaking.reset();
             }} /> : null}

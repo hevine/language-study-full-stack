@@ -1,0 +1,385 @@
+/**
+ * 解题答疑视频 · 分镜脚本生成（LLM 一次调用 + 代码侧强校验）。
+ *
+ * 决策：目标语讲解 + 中文字幕（用户确认）。
+ *   - narration：目标语（en/ja/ko）口语化 TTS 输入，喂给对应语种 Neural 音色；
+ *   - caption：中文字幕 / 屏幕文字。
+ *
+ * 硬约束（HANDOVER 第 8 节）：
+ *   1. 答案由 question.answer 决定，模型只讲「为什么」，不许改写选项；
+ *   2. passage 镜必须给 evidence 原句，代码校验是否能在 body 精确匹配，失败降级为段号；
+ *   3. 旁白禁止 markdown / 括号注释 / emoji，单句尽量 ≤ 40 字；
+ *   4. 不在请求处理器里跑长任务 —— 调用方在 job 里使用本函数。
+ */
+import type { Language } from '../domain/language';
+import type { Question } from '../domain/types';
+import type { ExplainVideo, Shot, ShotKind } from '../domain/explainVideo';
+import { computeServerTimeline } from '../domain/explainVideo';
+import { chatJson, resolveLlmConfig, type TokenUsage } from './llm';
+import { logger } from '../lib/logger';
+import { UpstreamError } from '../lib/errors';
+import {
+  ScriptSchema,
+  coerceScriptValue,
+  parseScriptText,
+  type ScriptParseResult,
+  type ShotDraft,
+} from './explainScriptSalvage';
+
+export type { ShotDraft };
+
+/** 本次脚本质量：是否靠抢救拿到、是否被截断、有多少镜是题库自动补的 */
+export interface ScriptQuality {
+  salvaged: boolean;
+  truncated: boolean;
+  autoFilled: number;
+}
+
+export interface ExplainInput {
+  articleId: string;
+  language: Language;
+  title: string;
+  body: string;
+  translation: string;
+  questions: Question[];
+  vocab?: Array<{ term: string; meaning?: string }>;
+}
+
+const NARRATION_LANG_LABEL: Record<Language, string> = {
+  en: 'English',
+  ja: '日本語',
+  ko: '한국어',
+};
+
+function buildSystem(language: Language): string {
+  const target = NARRATION_LANG_LABEL[language] ?? 'English';
+  return `You are an expert ${target} exam coach teaching Chinese-speaking learners. You produce a shot-by-shot script for an AI explainer video.
+
+LANGUAGE RULE (critical):
+- "narration" MUST be spoken ${target} only. Natural, concise, spoken style. No markdown, no brackets, no emoji, no citations. Each sentence <= 40 words.
+- "caption", "structure", "explanation", "translation", "pointLabel", "pointText" MUST be Chinese (简体中文).
+
+ANSWER RULE (critical):
+- You are GIVEN the correct answer index for each question. NEVER change it. Never say "choose X" in narration; instead explain WHY in ${target}.
+- Every question MUST have exactly one "answer" shot whose "picked" equals the given answer index, and one "question" shot that copies prompt+options verbatim.
+
+EVIDENCE RULE:
+- Each "passage" shot MUST copy one exact sentence from the article body into "evidence" (character-for-character) and give its 0-based "paragraph". If you cannot copy exactly, set "evidence" empty and only give "paragraph".
+- Each "grammar" shot MUST copy one exact sentence from the body into "sentence".
+
+SHOT SEQUENCE: start with one "cover"; then for each question in order emit "question" -> "passage" -> "grammar"(optional, at most one per article) -> "eliminate" -> "answer" -> "point"; end with one "takeaway".
+
+OUTPUT: JSON only, no code fence, no explanation. Shape: {"shots":[...]}. Each shot has: kind, questionNo (for question-related shots), narration, caption, plus kind-specific fields.`;
+}
+
+function buildUser(input: ExplainInput): string {
+  const questions = input.questions.map((q, i) => ({
+    no: i,
+    prompt: q.prompt,
+    options: q.options,
+    correctIndex: q.answer,
+    correctText: q.options[q.answer] ?? '',
+    existingExplanation: q.explain ?? '',
+  }));
+  return JSON.stringify(
+    {
+      title: input.title,
+      body: input.body,
+      chineseTranslation: input.translation,
+      vocab: input.vocab ?? [],
+      questions,
+      note: 'Copy prompt/options and evidence verbatim. correctIndex is authoritative.',
+    },
+    null,
+    2,
+  );
+}
+
+/** 把模型草稿 + 权威答案组装成合法 Shot 列表，并做代码侧校验 / 降级 */
+export function assembleShots(drafts: ShotDraft[], input: ExplainInput): Shot[] {
+  const paragraphs = input.body.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
+  const shots: Shot[] = [];
+
+  drafts.forEach((draft, index) => {
+    const questionNo = draft.questionNo;
+    const question = questionNo !== undefined ? input.questions[questionNo] : undefined;
+    const shot: Shot = {
+      id: `s${index}`,
+      kind: draft.kind as ShotKind,
+      narration: draft.narration.trim(),
+      caption: draft.caption.trim(),
+      questionNo,
+      audio: { url: '', durationMs: 0 },
+    };
+
+    // 题干 / 选项：以库内数据为准，模型给的不信
+    if (question && (draft.kind === 'question' || draft.kind === 'eliminate' || draft.kind === 'answer')) {
+      shot.prompt = question.prompt;
+      shot.options = [...question.options];
+    }
+
+    if (draft.kind === 'passage' || draft.kind === 'eliminate') {
+      const matched = draft.evidence && input.body.includes(draft.evidence);
+      shot.highlight = {
+        paragraph: draft.paragraph,
+        // 证据原句必须能在正文精确匹配，否则不填 sentence（前端降级为段号）
+        sentence: matched ? draft.evidence : undefined,
+        picked: draft.kind === 'eliminate' && question ? question.answer : undefined,
+      };
+    }
+
+    if (draft.kind === 'answer' && question) {
+      shot.highlight = {
+        picked: question.answer,
+        paragraph: draft.paragraph,
+        sentence: draft.evidence && input.body.includes(draft.evidence) ? draft.evidence : undefined,
+      };
+    }
+
+    if (draft.kind === 'grammar') {
+      const sentence = draft.sentence && input.body.includes(draft.sentence) ? draft.sentence : '';
+      shot.grammar = {
+        sentence,
+        structure: draft.structure ?? '',
+        explanation: draft.explanation ?? '',
+        translation: draft.translation ?? '',
+      };
+      if (!sentence) {
+        // 语法镜拿不到精确原句就降级为考点镜，避免编造原文
+        shot.kind = 'point';
+        shot.point = { label: draft.pointLabel ?? '语法要点', text: draft.explanation ?? draft.caption };
+      }
+    }
+
+    if (draft.kind === 'point') {
+      shot.point = { label: draft.pointLabel ?? '考点提示', text: draft.pointText ?? draft.caption };
+    }
+
+    // 兜底：段落号越界回落到 0
+    if (shot.highlight?.paragraph !== undefined && paragraphs.length > 0) {
+      shot.highlight.paragraph = Math.min(Math.max(0, shot.highlight.paragraph), paragraphs.length - 1);
+    }
+    shots.push(shot);
+  });
+
+  return shots;
+}
+
+/** 补镜用的旁白模板：目标语（跟 TTS 音色一致），字幕用中文 */
+const SYNTH: Record<Language, { question: (no: number) => string; answer: (text: string) => string }> = {
+  en: {
+    question: (no) => `Let's look at question ${no}.`,
+    answer: (text) => `The correct answer is ${text}.`,
+  },
+  ja: {
+    question: (no) => `第${no}問を見てみましょう。`,
+    answer: (text) => `正解は${text}です。`,
+  },
+  ko: {
+    question: (no) => `${no}번 문제를 살펴봅시다.`,
+    answer: (text) => `정답은 ${text}입니다.`,
+  },
+};
+
+/**
+ * 脚本可能不完整（模型被截断、部分镜被判定为坏数据丢弃），但视频必须完整：
+ * 按题号重组分镜，缺 question 镜就用题库补、缺 answer 镜就按权威答案补，
+ * 并把 answer 镜的 picked / prompt / options 强制对齐题库 —— 绝不出现「讲错的答案」。
+ */
+export function ensureCoverage(shots: Shot[], input: ExplainInput): { shots: Shot[]; autoFilled: number } {
+  let autoFilled = 0;
+  let cover: Shot | undefined;
+  const groups = new Map<number, Shot[]>();
+  const loose: Shot[] = [];
+  const tail: Shot[] = [];
+  const synth = SYNTH[input.language] ?? SYNTH.en;
+
+  for (const shot of shots) {
+    if (!cover && shot.kind === 'cover') {
+      cover = shot;
+      continue;
+    }
+    if (shot.kind === 'takeaway') {
+      tail.push(shot);
+      continue;
+    }
+    const no = shot.questionNo;
+    if (no !== undefined && no >= 0 && no < input.questions.length) {
+      const list = groups.get(no) ?? [];
+      list.push(shot);
+      groups.set(no, list);
+    } else {
+      loose.push(shot);
+    }
+  }
+
+  const out: Shot[] = [];
+  if (cover) out.push(cover);
+
+  input.questions.forEach((question, no) => {
+    const group = groups.get(no) ?? [];
+    const correct = question.options[question.answer] ?? '';
+
+    if (!group.some((shot) => shot.kind === 'question')) {
+      out.push({
+        id: `auto-question-${no}`,
+        kind: 'question',
+        questionNo: no,
+        narration: synth.question(no + 1),
+        caption: `第 ${no + 1} 题`,
+        prompt: question.prompt,
+        options: [...question.options],
+        audio: { url: '', durationMs: 0 },
+      });
+      autoFilled += 1;
+    }
+
+    for (const shot of group) {
+      if (shot.kind === 'answer') {
+        shot.highlight = { ...(shot.highlight ?? {}), picked: question.answer };
+        shot.prompt = question.prompt;
+        shot.options = [...question.options];
+      }
+      out.push(shot);
+    }
+
+    if (!group.some((shot) => shot.kind === 'answer')) {
+      out.push({
+        id: `auto-answer-${no}`,
+        kind: 'answer',
+        questionNo: no,
+        narration: synth.answer(correct),
+        caption: `正确答案是 ${correct}${question.explain ? `：${question.explain}` : ''}`.slice(0, 300),
+        prompt: question.prompt,
+        options: [...question.options],
+        highlight: { picked: question.answer },
+        audio: { url: '', durationMs: 0 },
+      });
+      autoFilled += 1;
+    }
+  });
+
+  out.push(...loose, ...tail);
+  // 用稳定 id 重排，避免自动补镜导致 id 重复
+  return { shots: out.map((shot, index) => ({ ...shot, id: `s${index}` })), autoFilled };
+}
+
+export interface GeneratedScript {
+  shots: Shot[];
+  rawShots: Shot[];
+  usage?: TokenUsage;
+  model: string | null;
+  quality: ScriptQuality;
+}
+
+export async function generateExplainScript(input: ExplainInput): Promise<GeneratedScript> {
+  const { config } = resolveLlmConfig();
+  if (!config) {
+    throw new UpstreamError('还没有配置大模型线路，无法生成讲解脚本。请在设置里配置后再试。');
+  }
+  const meta: { localRepaired?: boolean; modelRetried?: boolean; truncated?: boolean } = {};
+  /** 抢救器的最近一次结果，用于日志与质量标记 */
+  let rescued: ScriptParseResult | null = null;
+
+  /**
+   * 宽松校验：严格 zod 过了就直接用；过不了就让抢救器按对象粒度再捞一遍。
+   * 捞回来的草稿已经在抢救器里逐镜过了一遍 ShotDraftSchema，可信。
+   */
+  const scriptParser = {
+    safeParse(value: unknown) {
+      const strict = ScriptSchema.safeParse(value);
+      if (strict.success) return strict;
+      const drafts = coerceScriptValue(value, input.questions.length);
+      if (drafts.length > 0) return { success: true as const, data: { shots: drafts } };
+      return strict as { success: boolean; data?: { shots: ShotDraft[] }; error?: { issues: Array<{ path: (string | number)[]; message: string }> } };
+    },
+  };
+
+  /**
+   * 文本级抢救。捞回来的量太少时返回 null，把机会让给「加预算重生成」——
+   * 只有 2 个镜的残缺脚本配不上一条要花几分钟配音的视频。
+   */
+  const tolerant = (raw: string): unknown | null => {
+    const parsed = parseScriptText(raw, input.questions.length);
+    rescued = parsed;
+    logger.info('explain script parse attempt', {
+      articleId: input.articleId,
+      stage: parsed.stage,
+      shots: parsed.drafts.length,
+      rejected: parsed.rejected,
+      truncated: parsed.truncated,
+    });
+    const minimum = Math.min(Math.max(2, input.questions.length + 1), 6);
+    return parsed.drafts.length >= minimum ? { shots: parsed.drafts } : null;
+  };
+
+  let drafts: ShotDraft[] = [];
+  let quality: ScriptQuality = { salvaged: false, truncated: false, autoFilled: 0 };
+
+  try {
+    const result = await chatJson<{ shots: ShotDraft[] }>(
+      config,
+      [
+        { role: 'system', content: buildSystem(input.language) },
+        { role: 'user', content: buildUser(input) },
+      ],
+      scriptParser,
+      {
+        maxTokens: 6000,
+        temperature: 0.35,
+        meta,
+        tolerant,
+      },
+    );
+    drafts = result.shots;
+    const repairedInfo = rescued as ScriptParseResult | null;
+    quality.salvaged = Boolean(meta.localRepaired || meta.modelRetried);
+    quality.truncated = Boolean(repairedInfo?.truncated || meta.truncated);
+  } catch (err) {
+    // 最后一道：两次调用都没交出可用 JSON，但原文里也许还有写完的分镜 —— 按可用部分生成
+    const rawOutput = (err as { rawOutput?: string }).rawOutput;
+    const fallback = rawOutput ? parseScriptText(rawOutput, input.questions.length) : null;
+    if (fallback && fallback.drafts.length > 0) {
+      drafts = fallback.drafts;
+      quality = { salvaged: true, truncated: fallback.truncated, autoFilled: 0 };
+      logger.warn('explain script rescued from failed parse', {
+        articleId: input.articleId,
+        stage: fallback.stage,
+        shots: fallback.drafts.length,
+        rejected: fallback.rejected,
+      });
+    } else {
+      logger.warn('explain script generation failed', {
+        articleId: input.articleId,
+        err: (err as Error).message,
+      });
+      throw new UpstreamError(`讲解脚本生成失败：${(err as Error).message}`, {
+        hint: '可点「重试」；若反复失败，换一条模型线路，或缩短文章篇幅后重试',
+      });
+    }
+  }
+
+  const covered = ensureCoverage(assembleShots(drafts, input), input);
+  quality.autoFilled = covered.autoFilled;
+  const assembled = covered.shots;
+  if (assembled.length === 0) throw new UpstreamError('讲解脚本没有生成任何可用分镜，请重试');
+
+  logger.info('explain script generated', {
+    articleId: input.articleId,
+    shots: assembled.length,
+    questions: input.questions.length,
+    model: config.usedModel ?? config.model,
+    salvaged: quality.salvaged,
+    truncated: quality.truncated,
+    autoFilled: quality.autoFilled,
+  });
+  return {
+    shots: assembled,
+    rawShots: assembled,
+    usage: config.usage,
+    model: config.usedModel ?? config.model ?? null,
+    quality,
+  };
+}
+
+export { computeServerTimeline };

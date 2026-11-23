@@ -4,7 +4,7 @@
  */
 import crypto from 'node:crypto';
 import { sha256 } from './crypto';
-import type { AuthRole } from './constants';
+import { AUTH_ROLES, type AuthRole } from './constants';
 
 export interface AccessClaims {
   /** JWT 标准字段 */
@@ -90,7 +90,7 @@ export function verifyAccessToken(
   if (claims.aud !== params.audience) throw new TokenError('令牌受众不匹配');
   if (typeof claims.exp !== 'number' || claims.exp <= now) throw new TokenError('令牌已过期');
   if (typeof claims.nbf !== 'number' || claims.nbf > now + 30) throw new TokenError('令牌尚未生效');
-  if (claims.role !== 'admin' && claims.role !== 'user') throw new TokenError('令牌角色无效');
+  if (!(AUTH_ROLES as readonly string[]).includes(claims.role)) throw new TokenError('令牌角色无效');
   return claims;
 }
 

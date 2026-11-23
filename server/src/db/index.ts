@@ -39,19 +39,25 @@ export function runMigrations(): void {
   for (const file of files) {
     if (applied.has(file)) continue;
     const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
-    const apply = db.transaction(() => {
-      db.exec(sql);
-      db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(
-        file,
-        new Date().toISOString(),
-      );
-    });
+    // 重建被外键引用的表（如 016 的 users）时，SQLite 要求 foreign_keys 在事务外切换。
+    // 用文件首行的 `@foreign-keys-off` 标记声明，迁移体本身仍在一个事务内原子提交。
+    const needsFkOff = /^--\s*@foreign-keys-off\b/m.test(sql);
+    if (needsFkOff) db.pragma('foreign_keys = OFF');
     try {
+      const apply = db.transaction(() => {
+        db.exec(sql);
+        db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(
+          file,
+          new Date().toISOString(),
+        );
+      });
       apply();
       logger.info('migration applied', { file });
     } catch (err) {
       logger.error('migration failed', { file, error: (err as Error).message });
       throw err;
+    } finally {
+      if (needsFkOff) db.pragma('foreign_keys = ON');
     }
   }
 }

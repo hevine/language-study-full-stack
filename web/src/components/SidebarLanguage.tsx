@@ -3,7 +3,7 @@ import { api } from '../api';
 import { useLanguageSwitch } from '../hooks/useLanguageSwitch';
 import { pickPlanForLanguage, useApp } from '../store';
 import type { Language, Plan } from '../types';
-import Dropdown from './Dropdown';
+import { Dropdown } from '@waiyubaodian/ui-kit';
 
 /** 手绘双箭头：表示「换一个」，线条略带弧度，避免成套件的直角箭头 */
 function SwapGlyph() {

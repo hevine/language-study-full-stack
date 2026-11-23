@@ -25,6 +25,14 @@ const schema = z.object({
   LLM_MODEL: z.string().optional(),
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(90_000),
 
+  // ---- 语音识别（ASR）：录音转写走 OpenAI 兼容 /audio/transcriptions ----
+  /** 留空时回退到 LLM 号池里第一条可用线路的 baseUrl/apiKey（需该平台支持转录接口） */
+  ASR_BASE_URL: z.string().optional(),
+  ASR_API_KEY: z.string().optional(),
+  /** 转录模型，如 whisper-1 / gpt-4o-transcribe / SenseVoiceSmall */
+  ASR_MODEL: z.string().default('whisper-1'),
+  ASR_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
+
   // ---- 用户与鉴权 ----
   /** true 时除白名单外所有 /api 端点都要有效令牌；默认 false，保留本机游客使用习惯 */
   AUTH_REQUIRED: bool('false'),
@@ -35,9 +43,16 @@ const schema = z.object({
   AUTH_ISSUER: z.string().min(1).default('waiyu-baodian'),
   /** 扫码回调的公网基址，必须是微信/钉钉后台登记的 HTTPS 域名 */
   AUTH_PUBLIC_BASE_URL: z.string().optional(),
+  /** CSRF 同源白名单补充项，逗号分隔的完整 origin（用于局域网 IP / 自定义域名等） */
+  AUTH_ALLOWED_ORIGINS: z.string().optional(),
   /** 只在首次启动时给本地管理员设置密码；之后改密码用 npm run admin:passwd */
   AUTH_ADMIN_PASSWORD: z.string().optional(),
+  /** true：开放自助注册；false：只能由管理员手工建号 */
+  AUTH_ALLOW_REGISTER: bool('true'),
   AUTH_NEW_USER_STATUS: z.enum(['active', 'pending']).default('active'),
+  /** 账号级失败锁定阈值与窗口：连续 N 次密码错误锁 M 秒（0 表示关闭） */
+  AUTH_LOCK_THRESHOLD: z.coerce.number().int().min(0).max(100).default(5),
+  AUTH_LOCK_MINUTES: z.coerce.number().int().min(1).max(1440).default(15),
   AUTH_TICKET_TTL_SEC: z.coerce.number().int().min(60).max(1800).default(300),
   AUTH_LOGIN_CODE_TTL_SEC: z.coerce.number().int().min(30).max(600).default(90),
   /** 留空则跟随 NODE_ENV：生产 true，开发 false */
@@ -110,6 +125,12 @@ export const env = {
     model: raw.LLM_MODEL?.trim() ?? '',
     timeoutMs: raw.LLM_TIMEOUT_MS,
   },
+  asr: {
+    baseUrl: trimUrl(raw.ASR_BASE_URL),
+    apiKey: raw.ASR_API_KEY?.trim() ?? '',
+    model: raw.ASR_MODEL.trim() || 'whisper-1',
+    timeoutMs: raw.ASR_TIMEOUT_MS,
+  },
   auth: {
     required: raw.AUTH_REQUIRED,
     accessTtlSec: raw.AUTH_ACCESS_TTL_SEC,
@@ -118,8 +139,15 @@ export const env = {
     issuer: raw.AUTH_ISSUER,
     audience: 'waiyu-baodian-web',
     publicBaseUrl,
+    allowedOrigins: (raw.AUTH_ALLOWED_ORIGINS ?? '')
+      .split(',')
+      .map((value) => trimUrl(value.trim()))
+      .filter(Boolean),
     cookieSecure,
     newUserStatus: raw.AUTH_NEW_USER_STATUS,
+    allowRegister: raw.AUTH_ALLOW_REGISTER,
+    lockThreshold: raw.AUTH_LOCK_THRESHOLD,
+    lockMinutes: raw.AUTH_LOCK_MINUTES,
     ticketTtlSec: raw.AUTH_TICKET_TTL_SEC,
     loginCodeTtlSec: raw.AUTH_LOGIN_CODE_TTL_SEC,
     rateLimit: { max: raw.AUTH_RATE_LIMIT_MAX, windowSec: raw.AUTH_RATE_LIMIT_WINDOW_SEC },

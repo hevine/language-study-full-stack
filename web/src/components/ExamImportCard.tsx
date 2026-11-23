@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
 import { useApp } from '../store';
+import { Field } from '@waiyubaodian/ui-kit';
 import { Banner } from './ui';
-import Dropdown from './Dropdown';
+import { Dropdown } from '@waiyubaodian/ui-kit';
 import type { ExamImportJob, ExamPaperSummary, Language } from '../types';
 
 const ACCEPT = '.pdf,.docx,.epub,.txt,.md,.markdown,.html,.htm,.json';
@@ -180,18 +181,18 @@ export default function ExamImportCard({ language }: { language: Language }) {
       </div>
 
       <div className="import-fields">
-        <label className="import-field">
-          <span>年份</span>
-          <input
-            className="input"
+        <div className="import-field">
+          <Field
+            label="年份"
             type="number"
             min={1990}
             max={2100}
             value={year}
             disabled={running}
-            onChange={(event) => setYear(Number(event.target.value) || new Date().getFullYear())}
+            onChange={(value) => setYear(Number(value) || new Date().getFullYear())}
+            block
           />
-        </label>
+        </div>
         <label className="import-field">
           <span>卷别</span>
           <Dropdown
@@ -221,16 +222,16 @@ export default function ExamImportCard({ language }: { language: Language }) {
             onChange={(next) => setOcrMode(next === 'force' || next === 'off' ? next : 'auto')}
           />
         </label>
-        <label className="import-field import-field-wide">
-          <span>卷名</span>
-          <input
-            className="input"
+        <div className="import-field import-field-wide">
+          <Field
+            label="卷名"
             value={title}
             disabled={running}
             placeholder="留空则用文件名"
-            onChange={(event) => setTitle(event.target.value)}
+            onChange={setTitle}
+            block
           />
-        </label>
+        </div>
       </div>
 
       <div className="row" style={{ gap: 10 }}>

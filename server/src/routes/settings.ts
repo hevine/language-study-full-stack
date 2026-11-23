@@ -24,6 +24,16 @@ import {
   updatePoolKey,
 } from '../services/keyPool';
 import { llmStatus, pingLlm, resolveLlmConfig, type LlmConfig } from '../services/llm';
+import { pingAsr, readAsrSettings, saveAsrSettings } from '../services/asr';
+import { localAsrStatus, startLocalAsr } from '../services/localAsr';
+import {
+  addAsrPoolKey,
+  asrCandidateById,
+  deleteAsrPoolKey,
+  reorderAsrPoolKeys,
+  resetAsrPoolKey,
+  updateAsrPoolKey,
+} from '../services/asrPool';
 
 export const settingsRouter = Router();
 
@@ -79,7 +89,156 @@ settingsRouter.get(
   '/settings',
   asyncHandler(async (_req, res) => {
     const profile = ensureProfile();
-    res.json({ profile, llm: readLlmSettings() });
+    res.json({ profile, llm: readLlmSettings(), asr: readAsrSettings() });
+  }),
+);
+
+/** 语音识别（录音转写）线路：Key 加密保存，响应只回掩码 */
+settingsRouter.put(
+  '/settings/asr',
+  asyncHandler(async (req, res) => {
+    const body = parseBody(
+      z.object({ baseUrl: z.string().max(300), model: z.string().max(120), apiKey: z.string().max(400).optional() }),
+      req.body,
+    );
+    const asr = saveAsrSettings({ baseUrl: body.baseUrl, model: body.model, apiKey: body.apiKey });
+    res.json({ asr });
+  }),
+);
+
+/* ------------------------- 语音识别号池 ------------------------- */
+
+/** 本地兜底服务的实时状态：是否在跑、模型是否驻留、上次识别耗时 */
+settingsRouter.get(
+  '/settings/asr/local',
+  asyncHandler(async (_req, res) => {
+    res.json(await localAsrStatus());
+  }),
+);
+
+/** 设置页的「启动服务」：按需拉起本地进程（冷启动要等模型读进内存，接口本身很快） */
+settingsRouter.post(
+  '/settings/asr/local/start',
+  asyncHandler(async (_req, res) => {
+    res.json(await startLocalAsr());
+  }),
+);
+
+const AsrKeyInput = z.object({
+  label: z.string().max(60).optional(),
+  baseUrl: z.string().max(300),
+  model: z.string().max(120),
+  apiKey: z.string().max(400),
+  persist: z.boolean().optional(),
+  enabled: z.boolean().optional(),
+});
+
+settingsRouter.post(
+  '/settings/asr/keys',
+  asyncHandler(async (req, res) => {
+    const body = parseBody(AsrKeyInput, req.body);
+    const key = addAsrPoolKey({
+      label: body.label,
+      baseUrl: body.baseUrl,
+      model: body.model,
+      apiKey: body.apiKey,
+      persist: body.persist,
+      enabled: body.enabled,
+    });
+    tightenPermissions();
+    res.json({ key, asr: readAsrSettings() });
+  }),
+);
+
+const AsrKeyPatch = z.object({
+  label: z.string().max(60).optional(),
+  baseUrl: z.string().max(300).optional(),
+  model: z.string().max(120).optional(),
+  apiKey: z.string().max(400).optional(),
+  persist: z.boolean().optional(),
+  enabled: z.boolean().optional(),
+});
+
+// 注意：静态的 /order 必须注册在 /:id 之前，否则 "order" 会被当成线路 id
+settingsRouter.put(
+  '/settings/asr/keys/order',
+  asyncHandler(async (req, res) => {
+    const body = parseBody(z.object({ ids: z.array(z.string().max(60)).max(40) }), req.body);
+    reorderAsrPoolKeys(body.ids.filter((id) => id !== 'env'));
+    res.json({ ok: true, asr: readAsrSettings() });
+  }),
+);
+
+settingsRouter.put(
+  '/settings/asr/keys/:id',
+  asyncHandler(async (req, res) => {
+    if (req.params.id === 'env') throw new ConfigError('环境变量里的线路请改 .env，界面上不能编辑');
+    try {
+      const key = updateAsrPoolKey(req.params.id, parseBody(AsrKeyPatch, req.body));
+      res.json({ key, asr: readAsrSettings() });
+    } catch (err) {
+      if (/不存在/.test((err as Error).message)) throw new NotFoundError((err as Error).message);
+      throw err;
+    }
+  }),
+);
+
+settingsRouter.delete(
+  '/settings/asr/keys/:id',
+  asyncHandler(async (req, res) => {
+    if (req.params.id === 'env') throw new ConfigError('环境变量里的线路请改 .env');
+    if (!deleteAsrPoolKey(req.params.id)) throw new NotFoundError('这条线路不存在');
+    res.json({ ok: true, asr: readAsrSettings() });
+  }),
+);
+
+settingsRouter.post(
+  '/settings/asr/keys/:id/reset',
+  asyncHandler(async (req, res) => {
+    if (req.params.id === 'env') throw new ConfigError('环境变量里的线路不需要恢复');
+    resetAsrPoolKey(req.params.id);
+    res.json({ ok: true, asr: readAsrSettings() });
+  }),
+);
+
+/** 用内置测试音真实调用转录接口，验证某条线路连通性 */
+settingsRouter.post(
+  '/settings/asr/keys/:id/test',
+  asyncHandler(async (req, res) => {
+    const candidate = asrCandidateById(req.params.id);
+    if (!candidate) throw new ConfigError('这条线路还没有可用的 Key，请重新填写');
+    const result = await pingAsr(candidate);
+    res.json(result);
+  }),
+);
+
+/** 测试表单里正在填的值（尚未保存），没填 Key 时回落到已保存线路 */
+settingsRouter.post(
+  '/settings/asr/test',
+  asyncHandler(async (req, res) => {
+    const body = parseBody(
+      z.object({ keyId: z.string().max(60).optional(), baseUrl: z.string().max(300).optional(),
+        model: z.string().max(120).optional(), apiKey: z.string().max(400).optional() }),
+      req.body,
+    );
+    let config: { baseUrl: string; apiKey: string; model: string; keyId?: string | null };
+    if (!body.apiKey && body.keyId) {
+      const saved = asrCandidateById(body.keyId);
+      if (!saved) throw new ConfigError('这条线路还没有可用的 Key，请重新填写');
+      config = {
+        baseUrl: body.baseUrl || saved.baseUrl,
+        model: body.model || saved.model,
+        apiKey: saved.apiKey,
+        keyId: saved.keyId,
+      };
+    } else {
+      if (!body.baseUrl || !body.model || !body.apiKey) {
+        throw new ConfigError('请先填写 Base URL、模型名与 API Key');
+      }
+      config = { baseUrl: body.baseUrl, model: body.model, apiKey: body.apiKey };
+    }
+    const result = await pingAsr(config);
+    res.json(result);
   }),
 );
 
@@ -164,6 +323,19 @@ const KeyPatch = z.object({
   priority: z.number().int().min(0).max(9999).optional(),
 });
 
+const OrderInput = z.object({ ids: z.array(z.string().max(60)).max(40) });
+
+// 注意：静态的 /order 必须注册在 /:id 之前，否则 "order" 会被当成线路 id，
+// 落到 updatePoolKey('order') 并报「这条线路不存在」（与 /settings/asr/keys/order 同理）。
+settingsRouter.put(
+  '/settings/keys/order',
+  asyncHandler(async (req, res) => {
+    const body = parseBody(OrderInput, req.body);
+    reorderPoolKeys(body.ids.filter((id) => id !== 'env'));
+    res.json({ ok: true, llm: readLlmSettings() });
+  }),
+);
+
 settingsRouter.put(
   '/settings/keys/:id',
   asyncHandler(async (req, res) => {
@@ -195,17 +367,6 @@ settingsRouter.post(
   asyncHandler(async (req, res) => {
     if (req.params.id === 'env') throw new ConfigError('环境变量里的 Key 不需要恢复');
     resetPoolKey(req.params.id);
-    res.json({ ok: true, llm: readLlmSettings() });
-  }),
-);
-
-const OrderInput = z.object({ ids: z.array(z.string().max(60)).max(40) });
-
-settingsRouter.put(
-  '/settings/keys/order',
-  asyncHandler(async (req, res) => {
-    const body = parseBody(OrderInput, req.body);
-    reorderPoolKeys(body.ids.filter((id) => id !== 'env'));
     res.json({ ok: true, llm: readLlmSettings() });
   }),
 );

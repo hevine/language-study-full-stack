@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { Field, Slider } from '@waiyubaodian/ui-kit';
 import { Banner } from '../components/ui';
-import Dropdown from '../components/Dropdown';
+import { Dropdown } from '@waiyubaodian/ui-kit';
 import ExamCalendarCard from '../components/ExamCalendar';
 import { addDays, diffDays, formatCn, todayISO, useApp } from '../store';
 import type { ExamCalendar, ExamLink, ExamSession, Language } from '../types';
@@ -237,15 +238,14 @@ export default function Setup() {
 
           <div className="grid grid-2">
             <div className="field">
-              <label>每天能学多久：{dailyMinutes} 分钟</label>
-              <input
-                type="range"
+              <Slider
                 min={30}
                 max={240}
                 step={15}
                 value={dailyMinutes}
-                onChange={(event) => setDailyMinutes(Number(event.target.value))}
-                style={{ accentColor: 'var(--accent)' }}
+                onChange={setDailyMinutes}
+                label={`每天能学多久：${dailyMinutes} 分钟`}
+                ariaLabel="每天学习分钟数"
               />
               <div className="hint">建议 60–120 分钟；只背单词不朗读，分数涨得慢。</div>
             </div>
@@ -322,13 +322,13 @@ export default function Setup() {
 
             <details className="session-manual">
               <summary>日期对不上？手动指定考试日</summary>
-              <input
-                className="input"
+              <Field
                 type="date"
                 value={examDate}
                 min={addDays(todayISO(), 21)}
-                onChange={(event) => setExamDate(event.target.value)}
+                onChange={setExamDate}
                 style={{ marginTop: 8 }}
+                aria-label="手动指定考试日"
               />
             </details>
           </div>

@@ -108,12 +108,26 @@ server/src
   auth/           基础设施：请求作用域(AsyncLocalStorage)、JWT、密码哈希、常量
   db/             连接、迁移（顺序执行、可回滚）
 web/src
-  pages/          Setup / Dashboard / Today / Path / PracticeHub / Practice / Plan / Vocab / Settings / Login / AuthCallback
+  pages/          Setup / Dashboard / Today / Path / PracticeHub / Practice / Plan / Vocab / Settings / Login / AuthCallback / UIKit
   components/     文章阅读器、朗读器、理解题、语种切换、UserMenu、UI 基础件
   auth/           AuthProvider（登录态、静默刷新、401 重试广播）
   hooks/          useSpeaking（语音识别 + 录音）
-  theme.ts        Apple 系统配色主题（按语种自动适配，可手动固定）
+  uikit.css       UI 组件库预览页布局（组件本体样式来自 SDK）
 ```
+
+## UI 组件库（SDK）
+
+表单、下拉、开关、滑块、播放器与主题换肤已抽成独立包 `@waiyubaodian/ui-kit`，
+本项目与本机其它系统共用同一份源码：
+
+- 源码目录：`/Users/zhua/WorkBuddy/2026-11-22-14-24-29/ui-kit-sdk`
+- 说明文档：SDK 内 `README.md`（用法）· `INTEGRATION.md`（对接文档，含三种接入方式）
+- 本项目依赖：`"@waiyubaodian/ui-kit": "file:../../2026-11-22-14-24-29/ui-kit-sdk"`
+- 引入方式：`main.tsx` 引 `import '@waiyubaodian/ui-kit/styles.css'`；组件从 `@waiyubaodian/ui-kit` 导入，
+  主题 API 从 `@waiyubaodian/ui-kit/theme` 导入
+- 独立演示：`cd ui-kit-sdk && npm run dev:demo`（React 演示页）；`open ui-kit-sdk/demo/static-preview.html`（零依赖静态预览）
+- 接入别的系统：`npm i file:/Users/zhua/WorkBuddy/2026-11-22-14-24-29/ui-kit-sdk`，
+  或 `npm i @waiyubaodian/ui-kit`（已发布），或无 Node 环境时 `node ui-kit-sdk/scripts/copy-into.mjs --target <工程目录>` 直接拷 CSS
 
 ## 分级教材（0 → N2）
 
@@ -208,11 +222,11 @@ npm run build:speech -- --paper <id> --file <pdf> --block 4 --answers 1,2,0,1
 
 ### 用户主表与数据归属
 
-迁移 `014_auth.sql` 新增五张表，不改动任何原有业务表：
+迁移 `014_auth.sql` 新增五张表，不改动任何原有业务表；`016_auth_extensions.sql` 在 014 基础上**只增不改**地重建 `users` 表，扩展角色与账号安全字段：
 
 | 表 | 作用 |
 | --- | --- |
-| `users` | 用户主表：ID、用户名、密码哈希（scrypt）、昵称、头像、角色 `admin/user`、状态 `active/pending/disabled`、最后登录时间 |
+| `users` | 用户主表：ID、用户名（`COLLATE NOCASE` 大小写不敏感）、密码哈希（scrypt）、昵称、头像、角色 `admin/teacher/student/user`、状态 `active/pending/disabled`、预留 `email/phone/jlpt_level`（教师能力等级 N1–N5）、失败计数 `failed_attempts` 与锁定时间 `locked_until`、最后登录时间 |
 | `user_identities` | 外部身份：微信 `unionid ?? openid`、钉钉 `unionId`，一个真人可绑两个渠道 |
 | `auth_sessions` | 刷新令牌会话，只存 SHA-256 摘要；`family_id` 用于重放检测与整链撤销 |
 | `auth_login_tickets` | 扫码票据状态机，`state` / 票据密钥 / 兑换码都只存摘要 |
@@ -231,6 +245,23 @@ npm run build:speech -- --paper <id> --file <pdf> --block 4 --answers 1,2,0,1
 NEW_ADMIN_PASSWORD='至少8位' npm run admin:passwd
 # 或在 .env 里写 AUTH_ADMIN_PASSWORD（只在首次启动生效）
 ```
+
+### 自助注册与账号体系
+
+登录页顶部有「登录 / 注册」两个 tab。注册只需账号 + 密码（+ 可选昵称），密码规则 8–72 位、含字母与数字、不得与账号相同；
+成功后直接进入属于自己的独立空间，与游客及其它账号的数据完全隔离。
+
+- **角色**：注册身份可选「学生」或「教师」（默认学生），**不能自助注册管理员**；教师可预留能力等级 N1–N5。
+  教师能力判定、证书上传、测评考核与按角色定制的左侧菜单属于后续迭代，本版仅落库预留字段。
+- **开关**：`AUTH_ALLOW_REGISTER=false` 关闭自助注册，此时只能由管理员建号；
+  `AUTH_NEW_USER_STATUS=pending` 让新用户注册后待管理员审核（本机自用保持默认 `active`）。
+- **游客数据认领**：新账号默认空空间，游客 `local` 名下的历史数据不会自动搬迁。
+  在「账号中心 → 认领本机游客数据」可预览分项条数，二次确认后在一个事务内逐表搬移，**不可逆**；
+  注意会一并搬走本机配置的大模型 API Key（`llm_keys`）。
+- **账号维护**：账号中心可自助改昵称/头像、改密码（改后其它设备立即下线）；忘记密码由管理员在用户表里重置（云端无邮件通道）。
+- **失败锁定**：连续 5 次密码错误锁定 15 分钟（可用 `AUTH_LOCK_THRESHOLD` / `AUTH_LOCK_MINUTES` 调整，N=0 关闭）。
+
+自检：`npm run check:auth`（全离线临时库，覆盖注册/登录/改密/锁定/重置/refresh 重放/认领/登出）。
 
 ### 接入微信 / 钉钉（必须公网 HTTPS 回调）
 
@@ -312,6 +343,11 @@ AUTH_REQUIRED=true
 | --- | --- | --- | --- |
 | GET | `/api/auth/config` | 公开 | 登录页配置：是否强制登录、可用渠道、当前用户 |
 | POST | `/api/auth/login` | 公开 | 账号密码登录，返回 accessToken + 设置 refresh Cookie |
+| POST | `/api/auth/register` | 公开 | 自助注册（学生/教师）；成功直接登录，pending 时返回待审核 |
+| PATCH | `/api/auth/me` | 登录 | 改自己的昵称 / 头像（同步 profile 昵称） |
+| POST | `/api/auth/password` | 登录 | 旧密码改新密码，撤销其它设备会话 |
+| GET | `/api/auth/guest-data` | 登录 | 认领预览：游客名下各业务表待搬移条数 |
+| POST | `/api/auth/claim-guest` | 登录 | 确认认领游客数据（事务逐表搬移，不可逆） |
 | POST | `/api/auth/qr/start` | 公开 | 创建扫码票据，返回 `authorizeUrl` 与 `ticketSecret` |
 | GET | `/api/auth/qr/:ticketId` | 票据密钥 | 轮询扫码状态（pending / confirmed / failed / expired / consumed） |
 | POST | `/api/auth/qr/exchange` | 票据密钥 | 凭票据兑换令牌（一次性） |
@@ -321,8 +357,9 @@ AUTH_REQUIRED=true
 | GET | `/api/auth/me` | 登录 | 当前用户资料 |
 | GET/DELETE | `/api/auth/sessions[/:id]` | 登录 | 会话列表 / 下线指定设备 |
 | GET | `/api/auth/admin/users` | 管理员 | 用户主表（含身份与活跃会话数） |
-| POST | `/api/auth/admin/users` | 管理员 | 新建本地账号（用户名 + 密码 + 可选昵称/角色） |
+| POST | `/api/auth/admin/users` | 管理员 | 新建本地账号（用户名 + 密码 + 可选昵称/角色/教师等级） |
 | PATCH | `/api/auth/admin/users/:id` | 管理员 | 改角色 / 状态 / 昵称（禁止停用唯一管理员） |
+| POST | `/api/auth/admin/users/:id/password` | 管理员 | 重置指定用户密码（找回场景，撤销其全部会话） |
 | GET | `/api/auth/admin/audit` | 管理员 | 登录审计日志 |
 
 ## 说明与边界

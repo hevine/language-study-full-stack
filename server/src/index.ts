@@ -7,6 +7,8 @@ import { ensureExamBank } from './repositories/exams';
 import { bootstrapAuth } from './services/auth';
 import { llmStatus } from './services/llm';
 import { migrateLegacyKeys } from './services/keyPool';
+import { migrateLegacyAsr } from './services/asrPool';
+import { ensureLocalAsrPoolLine, warmLocalAsr } from './services/localAsr';
 
 function bootstrap(): void {
   runMigrations();
@@ -16,6 +18,10 @@ function bootstrap(): void {
   ensureExamBank();
   // 旧版本把 Key 明文写在 settings 里，这里加密封存进号池并把原值抹掉
   migrateLegacyKeys();
+  // 旧版单条 ASR 线路（settings.asr.*）搬进识别号池
+  migrateLegacyAsr();
+  // 装了本地 SenseVoice 兜底就把线路补进号池（已存在则跳过），随后后台预热
+  ensureLocalAsrPoolLine();
   tightenPermissions();
 
   const app = createApp();
@@ -33,6 +39,8 @@ function bootstrap(): void {
         host: env.host,
       });
     }
+    // 号池里排了本地兜底线路就先把它拉起来预热，别等真正要用时才冷启动
+    warmLocalAsr();
   });
 
   const shutdown = (signal: string) => {

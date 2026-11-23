@@ -1,10 +1,9 @@
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
-import { diffDays, todayISO, useApp } from '../store';
-import { THEMES } from '../theme';
+import { useApp } from '../store';
+import { THEMES } from '@waiyubaodian/ui-kit/theme';
 import NavIcon, { type NavIconName } from './NavIcon';
-import SidebarLanguage from './SidebarLanguage';
-import UserMenu from './UserMenu';
+import SidebarHub from './SidebarHub';
 
 const NAV: Array<{ to: string; label: string; icon: NavIconName }> = [
   { to: '/', label: '今日概览', icon: 'overview' },
@@ -14,12 +13,14 @@ const NAV: Array<{ to: string; label: string; icon: NavIconName }> = [
   { to: '/plan', label: '学习计划', icon: 'plan' },
   { to: '/vocab', label: '词汇本', icon: 'vocab' },
   { to: '/exams', label: '升级自测', icon: 'exam' },
+  { to: '/listening', label: '听力素材', icon: 'listen' },
+  { to: '/media-player', label: '播放器演示', icon: 'media' },
+  { to: '/ui-kit', label: 'UI 组件库', icon: 'uikit' },
   { to: '/settings', label: '设置', icon: 'settings' },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
-  const { plan, theme, setTheme, resetTheme, autoTheme, switching, catalog } = useApp();
-  const daysLeft = plan ? Math.max(0, diffDays(todayISO(), plan.examDate)) : 0;
+  const { theme, setTheme, resetTheme, autoTheme, switching, catalog } = useApp();
   const switchingName = switching
     ? catalog?.languages.find((item) => item.id === switching)?.nativeName ?? switching
     : '';
@@ -35,7 +36,8 @@ export default function Layout({ children }: { children: ReactNode }) {
           </div>
         </div>
 
-        <SidebarLanguage />
+        {/* Logo 正下方：身份 · 语种 · 目标 统一收进一块流光玻璃卡 */}
+        <SidebarHub />
 
         <nav className="nav">
           {NAV.map((item) => (
@@ -73,52 +75,6 @@ export default function Layout({ children }: { children: ReactNode }) {
               />
             ))}
           </div>
-        </div>
-
-        <UserMenu />
-
-        <div className="sidebar-foot">
-          {plan ? (
-            <>
-              <div className="countdown">
-                <div className="countdown-row">
-                  <strong>{daysLeft}</strong>
-                  <span>天后考试</span>
-                </div>
-                <div className="countdown-goal">
-                  <span className="countdown-target" title={plan.targetLabel}>
-                    {plan.targetLabel}
-                  </span>
-                  <NavLink
-                    className="goal-edit"
-                    to="/setup"
-                    title="去「定目标」变更考试、目标分数或考试日期"
-                  >
-                    <svg width="10" height="10" viewBox="0 0 16 16" aria-hidden="true">
-                      <path
-                        d="M10.9 2.4l2.7 2.7-8.3 8.3-3.4.7.7-3.4z"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.5"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                    改目标
-                  </NavLink>
-                </div>
-              </div>
-              <div className="small" style={{ opacity: 0.7 }}>
-                第 {plan.weeks} 周计划 · 每日 {plan.dailyMinutes} 分钟
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="small">还没有备考计划</div>
-              <NavLink className="goal-edit goal-edit-block" to="/setup" title="去「定目标」新建备考计划">
-                去定目标
-              </NavLink>
-            </>
-          )}
         </div>
       </aside>
 

@@ -27,6 +27,7 @@ import {
 import { currentAuthUser } from '../auth/requestScope';
 import {
   assertSameOrigin,
+  bearerToken,
   clearRefreshCookie,
   rateLimit,
   readCookie,
@@ -40,9 +41,9 @@ import { isProviderId } from '../services/oauthProviders';
 
 export const authRouter = Router();
 
-function sendTokens(res: Response, pair: TokenPair): void {
+function sendTokens(res: Response, pair: TokenPair, status = 200): void {
   setRefreshCookie(res, pair.refreshToken);
-  res.json({
+  res.status(status).json({
     accessToken: pair.accessToken,
     expiresIn: pair.expiresIn,
     user: pair.user,
@@ -73,6 +74,35 @@ authRouter.post(
     assertSameOrigin(req);
     const body = parseBody(LoginInput, req.body);
     sendTokens(res, auth.loginWithPassword(body.username, body.password, requestMeta(req)));
+  }),
+);
+
+/**
+ * 自助注册。
+ * 201 + 令牌（status=active，与登录同一套令牌链、Set-Cookie 轮换刷新令牌）
+ * 202 + { pending:true,user }（status=pending，等管理员启用）
+ * 错误按 code 分支：REGISTER_DISABLED / USERNAME_TAKEN / VALIDATION_FAILED / RATE_LIMITED
+ */
+const RegisterInput = z.object({
+  username: z.string().min(1).max(40),
+  password: z.string().min(1).max(200),
+  displayName: z.string().trim().min(1).max(60).optional(),
+  role: z.enum(['student', 'teacher']).optional(),
+  jlptLevel: z.enum(['N1', 'N2', 'N3', 'N4', 'N5']).optional(),
+});
+
+authRouter.post(
+  '/auth/register',
+  rateLimit('register'),
+  asyncHandler(async (req, res) => {
+    assertSameOrigin(req);
+    const body = parseBody(RegisterInput, req.body);
+    const result = auth.registerWithPassword(body, requestMeta(req));
+    if ('pending' in result) {
+      res.status(202).json({ pending: true, user: result.user });
+      return;
+    }
+    sendTokens(res, result, 201);
   }),
 );
 
@@ -182,6 +212,65 @@ authRouter.get(
   }),
 );
 
+/** 改自己的昵称/头像（依赖 Cookie 之外的 Bearer，但仍显式校验同源） */
+const UpdateMeInput = z.object({
+  displayName: z.string().trim().min(1).max(60).optional(),
+  avatarUrl: z.string().max(500).nullable().optional(),
+});
+
+authRouter.patch(
+  '/auth/me',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    assertSameOrigin(req);
+    const body = parseBody(UpdateMeInput, req.body);
+    res.json({ user: auth.updateMe(currentAuthUser()!.id, body) });
+  }),
+);
+
+/** 改密码：撤销其它设备，保留当前设备 */
+const ChangePasswordInput = z.object({
+  currentPassword: z.string().min(1).max(200),
+  newPassword: z.string().min(1).max(200),
+});
+
+authRouter.post(
+  '/auth/password',
+  requireAuth,
+  rateLimit('password'),
+  asyncHandler(async (req, res) => {
+    assertSameOrigin(req);
+    const body = parseBody(ChangePasswordInput, req.body);
+    auth.changePassword(
+      currentAuthUser()!.id,
+      body.currentPassword,
+      body.newPassword,
+      auth.sessionIdFromToken(bearerToken(req)),
+    );
+    res.json({ ok: true });
+  }),
+);
+
+/** 认领预览：游客名下待搬移的分项计数（只读，不搬移） */
+authRouter.get(
+  '/auth/guest-data',
+  requireAuth,
+  asyncHandler(async (_req, res) => {
+    res.json({ tables: auth.claimGuestPreview() });
+  }),
+);
+
+/** 确认认领：把游客数据整体搬到当前账号，不可逆 */
+authRouter.post(
+  '/auth/claim-guest',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    assertSameOrigin(req);
+    const result = auth.claimGuestData(currentAuthUser()!.id, requestMeta(req));
+    res.json({ result, total: result.reduce((sum, item) => sum + item.moved, 0) });
+  }),
+);
+
 authRouter.get(
   '/auth/sessions',
   requireAuth,
@@ -214,7 +303,8 @@ const AdminCreate = z.object({
   username: z.string().min(3).max(40),
   password: z.string().min(8).max(200),
   displayName: z.string().min(1).max(60).optional(),
-  role: z.enum(['admin', 'user']).optional(),
+  role: z.enum(['admin', 'user', 'student', 'teacher']).optional(),
+  jlptLevel: z.enum(['N1', 'N2', 'N3', 'N4', 'N5']).optional(),
 });
 
 authRouter.post(
@@ -227,7 +317,7 @@ authRouter.post(
 );
 
 const AdminPatch = z.object({
-  role: z.enum(['admin', 'user']).optional(),
+  role: z.enum(['admin', 'user', 'student', 'teacher']).optional(),
   status: z.enum(['active', 'pending', 'disabled']).optional(),
   displayName: z.string().min(1).max(60).optional(),
 });
@@ -239,6 +329,21 @@ authRouter.patch(
     const body = parseBody(AdminPatch, req.body);
     const patch: { role?: AuthRole; status?: UserStatus; displayName?: string } = body;
     res.json({ user: auth.adminUpdateUser(req.params.id, patch) });
+  }),
+);
+
+/** 管理员重置任意用户密码（含找回密码场景）：新密码由管理员设定，云端无邮件通道 */
+const AdminResetInput = z.object({
+  password: z.string().min(8).max(200),
+});
+
+authRouter.post(
+  '/auth/admin/users/:id/password',
+  requireRole('admin'),
+  asyncHandler(async (req, res) => {
+    assertSameOrigin(req);
+    const body = parseBody(AdminResetInput, req.body);
+    res.json({ user: auth.adminResetPassword(req.params.id, body.password) });
   }),
 );
 

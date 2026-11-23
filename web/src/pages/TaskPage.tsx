@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
 import AiEnrichPanel from '../components/AiEnrichPanel';
+import ExplainVideoPanel from '../components/ExplainVideoPanel';
 import ArticleView from '../components/ArticleView';
 import Quiz from '../components/Quiz';
 import ReadingPlayer from '../components/ReadingPlayer';
@@ -9,6 +10,7 @@ import WordDeck from '../components/WordDeck';
 import ExamCalendarCard from '../components/ExamCalendar';
 import PrepareArt from '../components/PrepareArt';
 import { Banner, kindLabel, SectionCard, StatusChip, CheckMark, TokenIcon } from '../components/ui';
+import { claimMediaPlayback } from '@waiyubaodian/ui-kit';
 import { formatCn, todayISO } from '../store';
 import type { DayResponse, TaskDetailResponse, TaskKind } from '../types';
 
@@ -89,11 +91,14 @@ export default function TaskPage() {
   const [regen, setRegen] = useState<'idle' | 'busy'>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [brief, setBrief] = useState<DayResponse | null>(null);
+  /** 精读页签：material=材料与题目，explain=解题答疑视频（全宽独立页签） */
+  const [readingTab, setReadingTab] = useState<'material' | 'explain'>('material');
 
   useEffect(() => {
     let alive = true;
     setData(null);
     setError(null);
+    setReadingTab('material');
     api
       .taskDetail(date, taskId)
       .then((response) => {
@@ -297,7 +302,44 @@ export default function TaskPage() {
       ) : null}
 
       {detail.kind === 'reading' ? (
-        <div className="stack">
+        <div className="reading-tabs-layout">
+          <div className="reading-tabs" role="tablist" aria-label="精读页签">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={readingTab === 'material'}
+              className={readingTab === 'material' ? 'active' : ''}
+              onClick={() => {
+                setReadingTab('material');
+                if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+                  window.speechSynthesis.cancel();
+                }
+              }}
+            >
+              精读材料 · 题目
+            </button>
+            {detail.payload.article.questions.length > 0 ? (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={readingTab === 'explain'}
+                className={readingTab === 'explain' ? 'active' : ''}
+                onClick={() => {
+                  setReadingTab('explain');
+                  // 切到讲解页签：让朗读/其他媒体停声，避免和讲解音频串台
+                  claimMediaPlayback('explain');
+                  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+                    window.speechSynthesis.cancel();
+                  }
+                }}
+              >
+                解题答疑视频 <span className="ev-tab-badge">AI</span>
+              </button>
+            ) : null}
+          </div>
+
+          <div className={`reading-tab-panel${readingTab === 'material' ? '' : ' hidden'}`}>
+          <div className="stack">
           <SectionCard
             title={detail.payload.mode === 'listen' ? '精听材料' : '精读材料'}
             extra={
@@ -365,6 +407,22 @@ export default function TaskPage() {
               <ArticleView article={detail.payload.secondary} language={plan.language} compact />
             </SectionCard>
           ) : null}
+          </div>
+
+          </div>
+
+          <div className={`reading-tab-panel${readingTab === 'explain' ? '' : ' hidden'}`}>
+            {detail.payload.article.questions.length > 0 ? (
+              <div className="ev-tab-stage">
+                <ExplainVideoPanel
+                  articleId={detail.payload.article.id}
+                  article={detail.payload.article}
+                  language={plan.language}
+                  wide
+                />
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : null}
 

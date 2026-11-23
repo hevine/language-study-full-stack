@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
+import { Area, Field, Switch } from '@waiyubaodian/ui-kit';
 import { Banner, SectionCard } from './ui';
 import { useApp } from '../store';
 import { useVoiceSystem } from '../hooks/useVoiceSystem';
@@ -30,7 +31,7 @@ import type {
   VoicesResponse,
   VoiceScene,
 } from '../types';
-import Dropdown, { type DropdownOption } from './Dropdown';
+import { Dropdown, type DropdownOption } from '@waiyubaodian/ui-kit';
 
 const LANG_LABEL: Record<Language, string> = { en: '英语', ja: '日语', ko: '韩语' };
 const LANGS: Language[] = ['en', 'ja', 'ko'];
@@ -88,6 +89,9 @@ export default function VoiceStudio() {
   const [discovering, setDiscovering] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
+  /** 试听代号：每次 stop/start 自增，旧的异步回调据此判断是否已过期，避免竞态清掉新试听 */
+  const previewTokenRef = useRef(0);
 
   const load = useCallback(async (lang: Language) => {
     try {
@@ -121,11 +125,15 @@ export default function VoiceStudio() {
 
   useEffect(() => {
     setActiveLang(planLanguage);
+    // P1-8：外部切换学习计划语种时也要停掉试听，避免旧语言的声音残留
+    stopPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planLanguage]);
 
   useEffect(
     () => () => {
       audioRef.current?.pause();
+      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
     },
     [],
@@ -153,11 +161,19 @@ export default function VoiceStudio() {
   };
 
   const stopPreview = () => {
+    // 代号自增：让所有在途的旧回调（onend/onerror/异步合成）自动失效
+    previewTokenRef.current += 1;
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
     const audio = audioRef.current;
     if (audio) {
+      audio.onended = null;
+      audio.onerror = null;
       audio.pause();
       audioRef.current = null;
+    }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
     }
     setPreviewId(null);
   };
@@ -169,6 +185,8 @@ export default function VoiceStudio() {
       return;
     }
     stopPreview();
+    const token = previewTokenRef.current;
+    const isCurrent = () => token === previewTokenRef.current;
     const sample = text.trim();
     if (!sample) {
       setMessage({ tone: 'danger', text: '先写一句试听语料再点试听' });
@@ -189,21 +207,31 @@ export default function VoiceStudio() {
       }
       try {
         const url = await api.synthesizeVoice(item.id, sample, activeLang, snapshot?.prefs.globalRate);
+        // P1-8：合成期间用户可能已切到别的试听，旧请求到达时直接丢弃 blob 并 revoke
+        if (!isCurrent()) {
+          URL.revokeObjectURL(url);
+          return;
+        }
         const audio = new Audio(url);
         audioRef.current = audio;
-        audio.onended = () => {
+        audioUrlRef.current = url;
+        const clear = () => {
           URL.revokeObjectURL(url);
-          setPreviewId(null);
+          if (audioUrlRef.current === url) audioUrlRef.current = null;
+          if (audioRef.current === audio) audioRef.current = null;
+          if (isCurrent()) setPreviewId(null);
         };
+        audio.onended = clear;
         audio.onerror = () => {
-          URL.revokeObjectURL(url);
-          setPreviewId(null);
-          setMessage({ tone: 'danger', text: '试听播放失败，请检查 TTS 配置' });
+          clear();
+          if (isCurrent()) setMessage({ tone: 'danger', text: '试听播放失败，请检查 TTS 配置' });
         };
-        void audio.play().catch(() => setPreviewId(null));
+        void audio.play().catch(() => clear());
       } catch (err) {
-        setPreviewId(null);
-        setMessage({ tone: 'danger', text: (err as Error).message });
+        if (isCurrent()) {
+          setPreviewId(null);
+          setMessage({ tone: 'danger', text: (err as Error).message });
+        }
       }
       return;
     }
@@ -223,8 +251,11 @@ export default function VoiceStudio() {
       utter.lang = BCP47[activeLang];
     }
     utter.rate = snapshot?.prefs.globalRate ?? item.rate;
-    utter.onend = () => setPreviewId(null);
-    utter.onerror = () => setPreviewId(null);
+    const clear = () => {
+      if (isCurrent()) setPreviewId(null);
+    };
+    utter.onend = clear;
+    utter.onerror = clear;
     window.speechSynthesis.speak(utter);
   };
 
@@ -404,14 +435,14 @@ export default function VoiceStudio() {
           {/* 试听语料与全局语速 */}
           <div className="voice-block">
             <div className="voice-block-title">我的试听语料</div>
-            <textarea
-              className="input"
+            <Area
               rows={2}
               value={prefs?.sampleText ?? ''}
               placeholder="写一句你想反复听的话，各页面的「试听」都会念它"
-              onChange={(event) =>
-                setSnapshot({ ...snapshot, prefs: { ...snapshot.prefs, sampleText: event.target.value } })
+              onChange={(value) =>
+                setSnapshot({ ...snapshot, prefs: { ...snapshot.prefs, sampleText: value } })
               }
+              block
             />
             <div className="row" style={{ marginTop: 8, flexWrap: 'wrap', gap: 8 }}>
               <span className="hint">全局语速</span>
@@ -669,14 +700,14 @@ export default function VoiceStudio() {
                       }))
                   ).map((item) => (
                     <label key={item.key} className="voice-candidate">
-                      <input
-                        type="checkbox"
+                      <Switch
                         checked={selectedKeys.includes(item.key)}
-                        onChange={(event) =>
+                        onChange={(checked) =>
                           setSelectedKeys((prev) =>
-                            event.target.checked ? [...prev, item.key] : prev.filter((key) => key !== item.key),
+                            checked ? [...prev, item.key] : prev.filter((key) => key !== item.key),
                           )
                         }
+                        ariaLabel={`选择 ${item.name}`}
                       />
                       <span style={{ flex: 1 }}>
                         <strong>{item.name}</strong>
@@ -701,76 +732,60 @@ export default function VoiceStudio() {
 
             {addTab === 'cloud' ? (
               <div className="voice-form">
-                <div className="field">
-                  <label>音色名称</label>
-                  <input
-                    className="input"
-                    value={draft.name}
-                    placeholder="例如：晨读 · 云端暖声"
-                    onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-                  />
-                </div>
-                <div className="field">
-                  <label>TTS 服务地址（OpenAI 兼容）</label>
-                  <input
-                    className="input"
-                    value={draft.baseUrl}
-                    placeholder="https://api.openai.com/v1"
-                    onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })}
-                  />
-                  <div className="hint" style={{ marginTop: 4 }}>
-                    也可填 <code>local://edge</code>（内置本地引擎）或 <code>http://127.0.0.1:5050/v1</code>（外部代理）
-                  </div>
-                </div>
+                <Field
+                  label="音色名称"
+                  value={draft.name}
+                  placeholder="例如：晨读 · 云端暖声"
+                  onChange={(value) => setDraft({ ...draft, name: value })}
+                  block
+                />
+                <Field
+                  label="TTS 服务地址（OpenAI 兼容）"
+                  value={draft.baseUrl}
+                  placeholder="https://api.openai.com/v1"
+                  onChange={(value) => setDraft({ ...draft, baseUrl: value })}
+                  hint={<>也可填 <code>local://edge</code>（内置本地引擎）或 <code>http://127.0.0.1:5050/v1</code>（外部代理）</>}
+                  block
+                />
                 <div className="voice-form-row">
-                  <div className="field">
-                    <label>模型</label>
-                    <input
-                      className="input"
-                      value={draft.model}
-                      placeholder="gpt-4o-mini-tts"
-                      onChange={(event) => setDraft({ ...draft, model: event.target.value })}
-                    />
-                  </div>
-                  <div className="field">
-                    <label>音色 ID</label>
-                    <input
-                      className="input"
-                      value={draft.voiceId}
-                      placeholder="nova / alloy / shimmer…"
-                      onChange={(event) => setDraft({ ...draft, voiceId: event.target.value })}
-                    />
-                  </div>
-                </div>
-                <div className="field">
-                  <label>API Key（本机加密保存，界面只显示掩码）</label>
-                  <input
-                    className="input"
-                    type="password"
-                    value={draft.apiKey ?? ''}
-                    placeholder="sk-…"
-                    autoComplete="off"
-                    onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })}
+                  <Field
+                    label="模型"
+                    value={draft.model}
+                    placeholder="gpt-4o-mini-tts"
+                    onChange={(value) => setDraft({ ...draft, model: value })}
+                    block
+                  />
+                  <Field
+                    label="音色 ID"
+                    value={draft.voiceId}
+                    placeholder="nova / alloy / shimmer…"
+                    onChange={(value) => setDraft({ ...draft, voiceId: value })}
+                    block
                   />
                 </div>
-                <div className="field">
-                  <label>风格指令（可选，mini-tts 系列支持）</label>
-                  <input
-                    className="input"
-                    value={draft.style}
-                    placeholder="温暖、清晰、略慢，适合语言学习"
-                    onChange={(event) => setDraft({ ...draft, style: event.target.value })}
-                  />
-                </div>
-                <div className="field">
-                  <label>听感描述</label>
-                  <input
-                    className="input"
-                    value={draft.persona}
-                    placeholder="悦耳暖声 · 新闻主播气质"
-                    onChange={(event) => setDraft({ ...draft, persona: event.target.value })}
-                  />
-                </div>
+                <Field
+                  label="API Key（本机加密保存，界面只显示掩码）"
+                  type="password"
+                  value={draft.apiKey ?? ''}
+                  placeholder="sk-…"
+                  autoComplete="off"
+                  onChange={(value) => setDraft({ ...draft, apiKey: value })}
+                  block
+                />
+                <Field
+                  label="风格指令（可选，mini-tts 系列支持）"
+                  value={draft.style}
+                  placeholder="温暖、清晰、略慢，适合语言学习"
+                  onChange={(value) => setDraft({ ...draft, style: value })}
+                  block
+                />
+                <Field
+                  label="听感描述"
+                  value={draft.persona}
+                  placeholder="悦耳暖声 · 新闻主播气质"
+                  onChange={(value) => setDraft({ ...draft, persona: value })}
+                  block
+                />
                 <button className="btn btn-primary btn-sm" disabled={busy} onClick={addCloud}>
                   添加云端音色
                 </button>
@@ -808,62 +823,47 @@ function VoiceEditor({
   return (
     <div className="voice-editor">
       <div className="voice-form-row">
-        <div className="field">
-          <label>名称</label>
-          <input className="input" value={name} onChange={(event) => setName(event.target.value)} />
-        </div>
-        <div className="field">
-          <label>语速（0.5–1.4）</label>
-          <input
-            className="input"
-            type="number"
-            step="0.02"
-            min="0.5"
-            max="1.4"
-            value={rate}
-            onChange={(event) => setRate(Number(event.target.value))}
-          />
-        </div>
+        <Field label="名称" value={name} onChange={setName} block />
+        <Field
+          label="语速（0.5–1.4）"
+          type="number"
+          step="0.02"
+          min="0.5"
+          max="1.4"
+          value={rate}
+          onChange={(value) => setRate(Number(value))}
+          block
+        />
       </div>
-      <div className="field">
-        <label>听感描述</label>
-        <input className="input" value={persona} onChange={(event) => setPersona(event.target.value)} />
-      </div>
+      <Field label="听感描述" value={persona} onChange={setPersona} block />
       {item.provider === 'cloud' ? (
         <>
           <div className="voice-form-row">
-            <div className="field">
-              <label>服务地址</label>
-              <input className="input" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
-            </div>
+            <Field label="服务地址" value={baseUrl} onChange={setBaseUrl} block />
             <div className="field">
               <label>模型 / 音色 ID</label>
               <div className="row" style={{ gap: 6 }}>
-                <input className="input" value={model} onChange={(event) => setModel(event.target.value)} />
-                <input className="input" value={voiceId} onChange={(event) => setVoiceId(event.target.value)} />
+                <Field value={model} onChange={setModel} placeholder="模型" block />
+                <Field value={voiceId} onChange={setVoiceId} placeholder="音色 ID" block />
               </div>
             </div>
           </div>
-          <div className="field">
-            <label>风格指令</label>
-            <input className="input" value={style} onChange={(event) => setStyle(event.target.value)} />
-          </div>
-          <div className="field">
-            <label>更换 API Key（留空表示不修改；已配置 {item.maskedKey || '无'}）</label>
-            <input
-              className="input"
-              type="password"
-              value={apiKey}
-              autoComplete="off"
-              placeholder="sk-…"
-              onChange={(event) => setApiKey(event.target.value)}
-            />
-          </div>
+          <Field label="风格指令" value={style} onChange={setStyle} block />
+          <Field
+            label={`更换 API Key（留空表示不修改；已配置 ${item.maskedKey || '无'}）`}
+            type="password"
+            value={apiKey}
+            autoComplete="off"
+            placeholder="sk-…"
+            onChange={setApiKey}
+            block
+          />
           {item.hasKey ? (
-            <label className="hint" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <input type="checkbox" checked={clearKey} onChange={(event) => setClearKey(event.target.checked)} />
-              清空已保存的 Key
-            </label>
+            <Switch
+              checked={clearKey}
+              onChange={setClearKey}
+              label="清空已保存的 Key"
+            />
           ) : null}
         </>
       ) : null}
