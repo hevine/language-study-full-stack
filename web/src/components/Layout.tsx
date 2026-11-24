@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { useApp } from '../store';
 import { THEMES } from '@waiyubaodian/ui-kit/theme';
 import NavIcon, { type NavIconName } from './NavIcon';
@@ -7,6 +7,7 @@ import SidebarHub from './SidebarHub';
 
 const NAV: Array<{ to: string; label: string; icon: NavIconName }> = [
   { to: '/', label: '今日概览', icon: 'overview' },
+  { to: '/studio', label: 'AI 学习台', icon: 'studio' },
   { to: '/today', label: '今日任务', icon: 'today' },
   { to: '/path', label: '学习之路', icon: 'path' },
   { to: '/practice', label: '写作·口语', icon: 'practice' },
@@ -21,6 +22,9 @@ const NAV: Array<{ to: string; label: string; icon: NavIconName }> = [
 
 export default function Layout({ children }: { children: ReactNode }) {
   const { theme, setTheme, resetTheme, autoTheme, switching, catalog } = useApp();
+  const location = useLocation();
+  // 工作台是三栏同屏，1140px 会挤成一栏，需要放宽内容区
+  const wide = location.pathname.startsWith('/studio');
   const switchingName = switching
     ? catalog?.languages.find((item) => item.id === switching)?.nativeName ?? switching
     : '';
@@ -78,7 +82,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      <main className={`main${switching ? ' is-syncing' : ''}`}>{children}</main>
+      <main className={`main${wide ? ' main-wide' : ''}${switching ? ' is-syncing' : ''}`}>{children}</main>
 
       {switching ? (
         <div className="lang-sync" role="status" aria-live="polite">

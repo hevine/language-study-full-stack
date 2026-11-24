@@ -1,0 +1,27 @@
+{
+  "id": "reading-explain",
+  "title": "精读文章解题讲解",
+  "version": "0.1.0",
+  "category": "reading",
+  "modes": ["ask", "craft"],
+  "match": {
+    "examples": [
+      "帮我讲讲这篇文章",
+      "这篇阅读看不懂",
+      "生成解题讲解视频",
+      "这道题为什么选 B",
+      "给我讲一下这篇精读",
+      "听力这段没听懂"
+    ],
+    "signals": ["指向某篇已生成的文章", "要讲解或要视频"]
+  },
+  "tools": ["profile.read", "explain.video"],
+  "artifacts": ["explain-video"],
+  "budget": { "maxSteps": 3, "maxTokens": 3000, "tts": false },
+  "lang": {
+    "requires": ["levelScale"],
+    "exams": { "en": ["*"], "ja": ["*"] }
+  },
+  "helpDefault": "L1",
+  "presenter": "video-pane"
+}

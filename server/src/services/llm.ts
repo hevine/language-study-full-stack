@@ -22,6 +22,8 @@ export interface LlmConfig {
   timeoutMs: number;
   /** 是否发送 response_format: json_object；部分国内平台不支持，会 400 */
   jsonMode: boolean;
+  /** 平台 id（zhipu / hunyuan / …）。决定「关思考」时该发哪个字段 */
+  providerId?: string;
   /** 这条配置来自号池时，标记线路 id；null 表示环境变量线路 */
   keyId?: string | null;
   /** 是否允许在失败时轮换到号池里的其他线路 */
@@ -132,6 +134,7 @@ export function resolveLlmConfig(): { config: LlmConfig | null; source: LlmStatu
         model: override.model.trim(),
         timeoutMs,
         jsonMode: wantsJsonMode(baseUrl, override.model.trim(), override.providerId),
+        providerId: override.providerId,
         keyId: null,
         pool: false,
       },
@@ -149,6 +152,7 @@ function fromCandidate(candidate: PoolCandidate): LlmConfig {
     model: candidate.model,
     timeoutMs: candidate.timeoutMs,
     jsonMode: wantsJsonMode(candidate.baseUrl, candidate.model, candidate.providerId),
+    providerId: candidate.providerId,
     keyId: candidate.keyId,
     label: candidate.label,
     lastError: candidate.lastError ?? null,
@@ -197,6 +201,16 @@ interface ChatOptions {
    * 所以调用方能按输出体量把预算放大。
    */
   timeoutMs?: number;
+  /**
+   * 是否允许模型「先想再答」。
+   *
+   * - 默认 'auto'：什么都不发，保持各家平台自己的默认行为（多数思考型模型默认开）。
+   * - 'off'：交互路径请显式传它。实测同一把 Key、同一句长难句、同一个规划任务，
+   *   glm-4.5-air 从 9.5s 降到 2.1~2.5s，正文长度基本不变（427~476 字 vs 426 字）。
+   *   慢的主因不是模型不行，是思维链把时间吃掉了。
+   * - 'on'：显式要求思考，留给「作文深评」这类值得等几秒换质量的场景。
+   */
+  thinking?: 'auto' | 'off' | 'on';
   /**
    * chatJson 专用的回传口：记录这次是不是靠本地修复救回来的，
    * 调用方（AI 加练）用它决定要不要在界面上标注「格式已自动修复」。
@@ -287,6 +301,34 @@ function emptyContentError(meta: { finishReason?: string; hasReasoning: boolean 
 }
 
 /** 真正发一次请求；jsonMode 决定要不要带 response_format */
+/**
+ * 「关掉思维链」时该往请求体里塞什么。
+ *
+ * 各家字段不一样，而且不是所有模型都允许关，所以这里按平台 + 模型名分派，
+ * 认不出来的平台一律不发 —— 多发一个它不认识的字段，换来的可能是一个 400，
+ * 比慢更糟。
+ *
+ * 实测（2026-11-24，同一句长难句、同一个规划任务、同一个 Key）：
+ *   glm-4.5-air    默认 9.5s（思维链占满）→ 关思考 2.1~2.5s，正文 427~476 字，与开着时持平
+ *   glm-5.3-flash  默认 16.3s 且正文为空 → 传 disabled 直接 400「该模型始终思考」→ 只能退到 low，8.1s
+ *   hy3            关思考 5.6s；hy4 关思考 10.9s（且爱写 1200+ 字，容易撞 max_tokens）
+ *   glm-4.7-flash  免费，但两次实测都是 429「访问量过大」，不能当主线路
+ */
+function thinkingPatch(config: LlmConfig, want: 'auto' | 'off' | 'on'): Record<string, unknown> {
+  if (want === 'auto') return {};
+  const model = config.model.toLowerCase();
+  const providerId = config.providerId ?? providerForBaseUrl(config.baseUrl)?.id ?? '';
+
+  // GLM-5 系列是「始终思考」，thinking.disabled 会被拒；只能把推理档降到 low
+  if (model.startsWith('glm-5')) {
+    return want === 'off' ? { reasoning_effort: 'low' } : { reasoning_effort: 'high' };
+  }
+  if (providerId === 'zhipu' || providerId === 'hunyuan') {
+    return want === 'off' ? { thinking: { type: 'disabled' } } : { thinking: { type: 'enabled' } };
+  }
+  return {};
+}
+
 async function requestOnce(
   config: LlmConfig,
   messages: ChatMessage[],
@@ -309,6 +351,7 @@ async function requestOnce(
         messages,
         temperature: options.temperature ?? 0.7,
         max_tokens: options.maxTokens ?? 2400,
+        ...thinkingPatch(config, options.thinking ?? 'auto'),
         ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
       }),
       signal: controller.signal,

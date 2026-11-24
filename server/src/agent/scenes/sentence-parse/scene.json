@@ -1,0 +1,26 @@
+{
+  "id": "sentence-parse",
+  "title": "长难句拆解与句子升格",
+  "version": "0.1.0",
+  "category": "sentence",
+  "modes": ["ask", "craft"],
+  "match": {
+    "examples": [
+      "这句读不懂",
+      "这句话什么意思",
+      "帮我分析这个长难句",
+      "把这句话写高级点",
+      "这句语法结构是什么"
+    ],
+    "signals": ["只有一两句话", "提到语法", "提到读不懂"]
+  },
+  "tools": ["profile.read", "gra.parse", "gra.contrast"],
+  "artifacts": ["syntax-tree"],
+  "budget": { "maxSteps": 4, "maxTokens": 8000, "tts": false },
+  "lang": {
+    "requires": ["tokenize", "syntax"],
+    "exams": { "en": ["*"], "ja": ["*"] }
+  },
+  "helpDefault": "L1",
+  "presenter": "syntax-pane"
+}

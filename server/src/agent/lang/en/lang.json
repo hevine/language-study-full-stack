@@ -1,0 +1,24 @@
+{
+  "code": "en",
+  "name": "英语",
+  "script": ["latin"],
+  "tokenizer": "whitespace",
+  "syntax": "tree",
+  "phonology": "ipa",
+  "levelScale": { "id": "cefr", "bands": ["A1", "A2", "B1", "B2", "C1", "C2"] },
+  "exams": ["toefl", "ielts", "cet6", "kaoyan"],
+  "scenes": {
+    "supported": [
+      "vocab",
+      "grammar",
+      "sentence",
+      "reading",
+      "writing",
+      "speaking",
+      "exam",
+      "translation",
+      "peripheral"
+    ],
+    "unsupported": {}
+  }
+}

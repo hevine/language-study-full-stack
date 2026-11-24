@@ -22,6 +22,8 @@ import AuthCallback from './pages/AuthCallback';
 const MediaPlayerDemo = lazy(() => import('./pages/MediaPlayerDemo'));
 const ListeningMaterial = lazy(() => import('./pages/ListeningMaterial'));
 const UIKit = lazy(() => import('./pages/UIKit'));
+// 工作台自带流式执行与播放器，只有进来时才需要
+const AgentStudio = lazy(() => import('./pages/AgentStudio'));
 import { AppCtx, pickPlanForLanguage, useApp } from './store';
 import { applyTheme, isAutoTheme, resetTheme, resolveTheme, saveTheme, type ThemeId } from '@waiyubaodian/ui-kit/theme';
 import { useAuth } from './auth/AuthProvider';
@@ -89,6 +91,9 @@ function AppContent() {
         <Route path="/" element={plan ? <Dashboard /> : <Navigate to="/setup" replace />} />
         <Route path="/setup" element={<Setup />} />
         <Route path="/today" element={plan ? <Today /> : <Navigate to="/setup" replace />} />
+        {/* 学习台不强制有学习计划：没有计划时也能先把作文贴进来改
+            （产物采纳才会要求有今日任务，那一步会明确提示去建计划） */}
+        <Route path="/studio" element={<AgentStudio />} />
         <Route
           path="/task/:date/:taskId"
           element={plan ? <TaskPage /> : <Navigate to="/setup" replace />}

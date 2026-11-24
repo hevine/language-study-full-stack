@@ -59,6 +59,16 @@ import type {
   ExplainExportTrack,
   ExplainVideoSummary,
 } from './types';
+import type {
+  AgentAdoptInput,
+  AgentAdoptResult,
+  AgentEvent,
+  AgentRun,
+  AgentRunInput,
+  AgentRunSummary,
+  AgentScenesResponse,
+  ExplainJobState,
+} from './agentTypes';
 
 const BASE = '/api';
 
@@ -1018,4 +1028,102 @@ export const api = {
     }
     return URL.createObjectURL(await response.blob());
   },
+
+  // -------------------------------------------------------------------------
+  // Lingua Agent Studio
+  // -------------------------------------------------------------------------
+
+  agentScenes: () => request<AgentScenesResponse>('/agent/scenes', {}, 0),
+
+  agentRuns: (limit = 20) =>
+    request<{ runs: AgentRunSummary[] }>(`/agent/runs?limit=${encodeURIComponent(String(limit))}`, {}, 0),
+
+  agentRun: (runId: string) =>
+    request<{ run: AgentRun }>(`/agent/runs/${encodeURIComponent(runId)}`, {}, 0),
+
+  /**
+   * 流式跑一次 Agent。
+   *
+   * 为什么不用 EventSource：它只支持 GET，而 run 的入参（正文、文章 id）放不进 URL，
+   * 硬塞会导致长作文被 URL 长度截断。所以这里用 fetch + 手写 SSE 帧解析。
+   */
+  agentRunStream: async (
+    input: AgentRunInput,
+    onEvent: (event: AgentEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    const response = await fetchWithAuth(`${BASE}/agent/run`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+      signal,
+    });
+
+    if (!response.ok || !response.body) {
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: { message?: string; code?: string } }
+        | null;
+      throw new ApiError(
+        payload?.error?.message ?? `Agent 启动失败（${response.status}）`,
+        response.status,
+        payload?.error?.code ?? 'AGENT_RUN_FAILED',
+      );
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    const flush = (frame: string): boolean => {
+      const data = frame
+        .split('\n')
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trimStart())
+        .join('\n');
+      if (!data) return false;
+      if (data === '[DONE]') return true;
+      try {
+        onEvent(JSON.parse(data) as AgentEvent);
+      } catch {
+        // 半截帧（服务端 write 被切断）不该让整次 run 失败，丢掉即可
+      }
+      return false;
+    };
+
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+      let index = buffer.indexOf('\n\n');
+      while (index >= 0) {
+        const frame = buffer.slice(0, index);
+        buffer = buffer.slice(index + 2);
+        if (flush(frame)) return;
+        index = buffer.indexOf('\n\n');
+      }
+    }
+    if (buffer.trim()) flush(buffer);
+  },
+
+  /**
+   * 采纳产物。
+   *
+   * 不重试：这是有副作用的写操作，重试会让错因被记两次、任务重复挂载。
+   */
+  agentAdopt: (input: AgentAdoptInput) =>
+    request<AgentAdoptResult>(
+      '/agent/adopt',
+      { method: 'POST', body: JSON.stringify(input) },
+      0,
+    ),
+
+  /** 讲解视频作业进度。running 时前端继续轮询，done 后去取 videoId */
+  agentExplainPoll: (jobId: string) =>
+    request<ExplainJobState>(`/agent/media/explain/${encodeURIComponent(jobId)}`, {}, 0),
+
+  /** 取消一个还在跑的讲解作业，避免用户改主意后仍继续烧 token */
+  agentExplainCancel: (jobId: string) =>
+    request<{ ok: boolean }>(`/explain-videos/jobs/${encodeURIComponent(jobId)}`, {
+      method: 'DELETE',
+    }, 0),
 };

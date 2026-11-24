@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { env } from '../config/env';
+import { agentRouter } from '../agent/routes';
 import { enforceAuth, optionalAuthenticate } from '../middleware/auth';
 import { authRouter } from './auth';
 import { aiRouter } from './ai';
@@ -53,3 +54,6 @@ apiRouter.use(materialsRouter);
 apiRouter.use(listeningRouter);
 apiRouter.use(statsRouter);
 apiRouter.use(settingsRouter);
+
+// Lingua Agent：同进程挂载，前缀独立（将来整体拆分只改反代）
+apiRouter.use(agentRouter);

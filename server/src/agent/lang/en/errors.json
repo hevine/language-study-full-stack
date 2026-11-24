@@ -1,0 +1,18 @@
+{
+  "rules": [
+    { "id": "article", "label": "冠词（缺失/多余/定冠与不定冠）", "severity": "must-fix" },
+    { "id": "sva", "label": "主谓一致", "severity": "must-fix" },
+    { "id": "tense-shift", "label": "时态跳跃", "severity": "must-fix" },
+    { "id": "plural", "label": "单复数与可数性", "severity": "must-fix" },
+    { "id": "preposition", "label": "介词搭配", "severity": "should-fix" },
+    { "id": "collocation", "label": "动名/形名搭配", "severity": "should-fix" },
+    { "id": "word-order", "label": "语序与修饰位置", "severity": "should-fix" },
+    { "id": "run-on", "label": "逗号粘连句", "severity": "must-fix" },
+    { "id": "fragment", "label": "残缺句", "severity": "must-fix" },
+    { "id": "punctuation", "label": "标点使用", "severity": "should-fix" },
+    { "id": "spelling", "label": "拼写", "severity": "must-fix" },
+    { "id": "redundancy", "label": "冗余表达", "severity": "style" },
+    { "id": "register", "label": "语域不当（口语入文/书面过度）", "severity": "style" },
+    { "id": "nominalization", "label": "名词化堆叠", "severity": "style" }
+  ]
+}

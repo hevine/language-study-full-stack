@@ -6,6 +6,24 @@ export interface TaskRef {
   articleKind?: 'intensive' | 'extensive';
 }
 
+/**
+ * Agent 产物挂载记录。
+ *
+ * 为什么挂在任务里而不是新开一张表：产物是任务的附件，不是独立实体。
+ * 用户打开「今日任务」就该看到昨天的批改结果，多一张关联表只会让这个入口多一次 join。
+ * type 用 string 而不是 ArtifactType：domain 层不该反向依赖 agent 层。
+ */
+export interface TaskArtifactRef {
+  artifactId: string;
+  /** annotated-diff / score-report / explain-video / syntax-tree … */
+  type: string;
+  title: string;
+  /** 产出它的场景 id 与 run，供「这条批注是怎么来的」追溯 */
+  scene: string;
+  runId: string;
+  createdAt: string;
+}
+
 export interface Task {
   id: string;
   kind: TaskKind;
@@ -16,6 +34,11 @@ export interface Task {
   /** 完成时记录得分（0–100），可为空 */
   score?: number;
   ref?: TaskRef;
+  /**
+   * Agent 产出的批注、报告、讲解视频。
+   * 旧数据的 tasks JSON 里没有该字段，所有读取端必须按 `task.artifacts ?? []` 处理。
+   */
+  artifacts?: TaskArtifactRef[];
 }
 
 export interface VocabEntry {

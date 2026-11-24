@@ -1,0 +1,25 @@
+{
+  "code": "ja",
+  "name": "日本語",
+  "script": ["hiragana", "katakana", "kanji"],
+  "tokenizer": "kuromoji",
+  "syntax": "chunk",
+  "phonology": "mora+pitch",
+  "levelScale": { "id": "jlpt", "bands": ["N5", "N4", "N3", "N2", "N1"] },
+  "exams": ["jlpt-n5", "jlpt-n4", "jlpt-n3", "jlpt-n2", "jlpt-n1"],
+  "scenes": {
+    "supported": [
+      "vocab",
+      "grammar",
+      "sentence",
+      "reading",
+      "speaking",
+      "exam",
+      "translation",
+      "peripheral"
+    ],
+    "unsupported": {
+      "writing": "JLPT 不考写作。要不要试试「句子升格」或「敬语改写」？"
+    }
+  }
+}

@@ -35,7 +35,8 @@
     "import:vocab": "tsx scripts/importVocabBook.ts",
     "sdk:local": "node scripts/switchExplainSdk.mjs local",
     "sdk:npm": "node scripts/switchExplainSdk.mjs npm",
-    "check:parse": "tsx scripts/checkExplainParse.ts"
+    "check:parse": "tsx scripts/checkExplainParse.ts",
+    "check:agent": "tsx server/src/agent/evals/harness.ts"
   },
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",

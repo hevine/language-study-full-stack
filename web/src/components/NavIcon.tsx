@@ -2,6 +2,7 @@ import { useId } from 'react';
 
 export type NavIconName =
   | 'overview'
+  | 'studio'
   | 'today'
   | 'path'
   | 'practice'
@@ -59,6 +60,19 @@ function draw(name: NavIconName, grad: string) {
           <path d="M17.23 6.77A7.4 7.4 0 1 1 17.23 17.23" />
           <circle cx="12" cy="12" r="2.7" fill={grad} stroke="none" />
           <circle cx="12" cy="12" r="4.9" opacity="0.28" strokeDasharray="1.4 3.2" />
+        </g>
+      );
+
+    // AI 学习台：工作台窗口 + 提示符，高光件是光标与右上角信号点
+    case 'studio':
+      return (
+        <g>
+          <rect x="3.2" y="4.4" width="17.6" height="15.2" rx="3.4" />
+          <path d="M3.2 8.4h17.6" opacity="0.6" />
+          <circle cx="5.9" cy="6.4" r="0.85" fill={grad} stroke="none" />
+          <path d="M7 12.1l2.5 2.2-2.5 2.2" strokeWidth="1.6" />
+          <path d="M12.1 16.5h4.2" stroke={grad} strokeWidth="1.9" />
+          <circle cx="17.5" cy="6.4" r="1.1" fill={grad} stroke="none" opacity="0.85" />
         </g>
       );
 
