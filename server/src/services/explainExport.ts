@@ -33,31 +33,13 @@ import type { Language } from '../domain/language';
 import type { ExplainVideo } from '../domain/explainVideo';
 import { getVideoDir } from './explainVideo';
 import {
+  clearExports,
   exportPath,
   nativeSegmentPath,
   segmentPath,
   type ExportTrack,
 } from '../repositories/explainVideos';
-
-/**
- * 中文字体候选。
- *
- * 顺序不是审美偏好，是实测：PingFang.ttc 在 freetype 下会漏个别字（U+8FDC「远」
- * 渲染成空白，「关于远程办公」变成「关于  程办公」），而 Hiragino Sans GB 与
- * STHeiti Light 都齐全。漏字比换字体难看得多，所以把 PingFang 降到兜底位。
- */
-const FONT_CANDIDATES = [
-  '/System/Library/Fonts/Hiragino Sans GB.ttc',
-  '/System/Library/Fonts/STHeiti Light.ttc',
-  '/System/Library/Fonts/Supplemental/Songti.ttc',
-  '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
-  // 兜底：字体齐全度略差（见上），但至少是系统自带
-  '/System/Library/Fonts/PingFang.ttc',
-];
-
-function findFont(): string | null {
-  return FONT_CANDIDATES.find((p) => fs.existsSync(p)) ?? null;
-}
+import { findFont, fontKindForText, wrapText } from './explainSubtitle';
 
 /** 容器里的语言标记：剪辑软件据此把两条音轨标成「日语 / 中文」而不是「Audio 1/2」 */
 const LANG_TAG: Record<Language, string> = { en: 'eng', ja: 'jpn', ko: 'kor' };
@@ -66,39 +48,33 @@ const FRAME_W = 960;
 const FRAME_H = 540;
 const TITLE_SIZE = 32;
 const LINE_SIZE = 20;
+const TITLE_GAP = 14;
+/** 逐行 drawtext 的行高：沿用旧版整块渲染的估算，保证垂直居中位置不漂 */
+const TITLE_LINE_H = Math.round(TITLE_SIZE * 1.25);
+const BODY_LINE_H = Math.round(LINE_SIZE * 1.35);
 
 /**
- * drawtext 不会自动换行：长句会一路排到画面外被裁掉。
- * 按显示宽度折行——全角字符算 1 个单位、拉丁字母 0.55；最多三行，再多就截断
- * （三行已经吃满画面下半区，继续堆只会更难读）。
- * 带一句避头标点：句号逗号不落在行首，宁可让上一行多挤一个字符。
+ * 导出渲染版本。字体/排版口径一变，旧 mp4 就必须失效：
+ * 否则用户点「导出」直接命中缓存，看到的还是乱码那份。
+ *
+ * 只失效韩语片：v2 修的是谚文缺字体，中文/日文旧导出本来就是好的，
+ * 不能因为一次韩语修复把别人可用的分享文件删掉。
  */
-function wrapText(text: string, maxUnits: number, maxLines = 3): string {
-  const clean = text.replace(/\s+/g, ' ').trim();
-  const NO_LINE_START = /[。、，．,.!?！？；：）】」』’”…—]/;
-  const lines: string[] = [];
-  let line = '';
-  let units = 0;
-  for (const ch of [...clean]) {
-    const wide = /[\u2e80-\u9fff\u3040-\u30ff\uac00-\ud7af\uff00-\uffef]/.test(ch);
-    const w = wide ? 1 : 0.55;
-    if (units + w > maxUnits && line) {
-      if (NO_LINE_START.test(ch)) {
-        line += ch;
-        units += w;
-        continue;
-      }
-      lines.push(line);
-      line = ch;
-      units = w;
-      if (lines.length >= maxLines) break;
-    } else {
-      line += ch;
-      units += w;
-    }
+const RENDER_VERSION = 2;
+const RENDER_VERSION_FILE = '.export-render-version';
+
+function invalidateStaleExports(video: ExplainVideo, dir: string): void {
+  if (video.language !== 'ko') return;
+  const marker = path.join(dir, RENDER_VERSION_FILE);
+  let version = '';
+  try {
+    version = fs.readFileSync(marker, 'utf8').trim();
+  } catch {
+    // 没有标记 = 本次改动之前的产物，全部按旧版处理
   }
-  if (lines.length < maxLines && line) lines.push(line);
-  return lines.join('\n');
+  if (version === String(RENDER_VERSION)) return;
+  clearExports(dir);
+  fs.writeFileSync(marker, String(RENDER_VERSION), 'utf8');
 }
 
 function runFfmpeg(args: string[], timeoutMs = 8 * 60_000): Promise<void> {
@@ -197,6 +173,7 @@ export async function exportExplainVideo(
   }
 
   const out = exportPath(dir, track);
+  invalidateStaleExports(video, dir);
   if (fs.existsSync(out) && fs.statSync(out).size > 0) return out;
 
   try {
@@ -209,8 +186,7 @@ export async function exportExplainVideo(
     );
   }
 
-  const font = findFont();
-  if (!font) throw new ConfigError('没有找到中文字体，无法在画面里渲染字幕');
+  if (!findFont('cjk')) throw new ConfigError('没有找到可用的字幕字体，无法在画面里渲染字幕');
 
   // 中间产物统一放一个临时子目录：一次 recursive 删除就能收干净，
   // 也不会把 ev-text-* 这类文件混进视频目录（之前是逐个删，20 镜就上百次删除调用）
@@ -233,27 +209,40 @@ export async function exportExplainVideo(
       const dur = Math.max(0.1, shot.audio.durationMs / 1000);
       cursorSec += dur;
 
-      const titleFile = path.join(tmpDir, `title-${index}.txt`);
-      const lineFile = path.join(tmpDir, `line-${index}.txt`);
       // 导中文音轨时第二行换成中文口播稿：否则「中文在讲、屏幕上是日文」很割裂
       const second = track === 'native' ? shot.narrationZh || shot.narration : shot.narration;
-      const titleText = wrapText(`${index + 1}. ${shot.caption || shot.narration}`, 24, 3);
-      const lineText = wrapText(second, 40, 3);
-      fs.writeFileSync(titleFile, titleText, 'utf8');
-      fs.writeFileSync(lineFile, lineText, 'utf8');
+      const titleLines = wrapText(`${index + 1}. ${shot.caption || shot.narration}`, 24, 3).split('\n');
+      const bodyLines = wrapText(second, 40, 3).split('\n');
 
       // 字幕块整体垂直居中：行数不同时不要出现「有时候偏上」
-      const titleH = titleText.split('\n').length * TITLE_SIZE * 1.25;
-      const lineH = lineText.split('\n').length * LINE_SIZE * 1.35;
-      const gap = 14;
-      const top = Math.round((FRAME_H - (titleH + gap + lineH)) / 2);
+      const titleH = titleLines.length * TITLE_LINE_H;
+      const bodyH = bodyLines.length * BODY_LINE_H;
+      const top = Math.round((FRAME_H - (titleH + TITLE_GAP + bodyH)) / 2);
       const window = `between(t,${start.toFixed(3)},${(start + dur).toFixed(3)})`;
-      filters.push(
-        `drawtext=fontfile='${font}':textfile='${titleFile}':fontsize=${TITLE_SIZE}:fontcolor=white:line_spacing=8:x=(w-text_w)/2:y=${top}:enable='${window}'`,
-      );
-      filters.push(
-        `drawtext=fontfile='${font}':textfile='${lineFile}':fontsize=${LINE_SIZE}:fontcolor=#d7e0ff:line_spacing=6:x=(w-text_w)/2:y=${top + Math.round(titleH + gap)}:enable='${window}'`,
-      );
+
+      // 一行一张 drawtext：同一镜里中文标题和韩文口播需要的字体不同，
+      // 整块塞进一个滤镜只能选一种字体，另一边必然豆腐块
+      const pushBlock = (
+        lines: string[],
+        size: number,
+        color: string,
+        lineH: number,
+        baseY: number,
+        tag: string,
+      ) => {
+        lines.forEach((line, lineIndex) => {
+          if (!line) return;
+          const font = findFont(fontKindForText(line));
+          if (!font) throw new ConfigError('没有找到可用的字幕字体，无法在画面里渲染字幕');
+          const textFile = path.join(tmpDir, `${tag}-${index}-${lineIndex}.txt`);
+          fs.writeFileSync(textFile, line, 'utf8');
+          filters.push(
+            `drawtext=fontfile='${font}':textfile='${textFile}':fontsize=${size}:fontcolor=${color}:x=(w-text_w)/2:y=${baseY + lineIndex * lineH}:enable='${window}'`,
+          );
+        });
+      };
+      pushBlock(titleLines, TITLE_SIZE, 'white', TITLE_LINE_H, top, 'title');
+      pushBlock(bodyLines, LINE_SIZE, '#d7e0ff', BODY_LINE_H, top + titleH + TITLE_GAP, 'line');
     });
     const totalSec = Math.max(1, cursorSec);
     const videoFilter = `color=c=0x12172a:s=${FRAME_W}x${FRAME_H}:r=24:d=${totalSec.toFixed(3)},${filters.join(',')}`;

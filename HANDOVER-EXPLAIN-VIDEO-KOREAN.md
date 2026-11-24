@@ -1,6 +1,9 @@
-# 解题答疑视频 · 教案资源输入（韩语 1–5 级）· 交接文档
+# 解题答疑视频 · 教案资源输入（韩语 1–6 级）· 交接文档
 
-> 本文档只覆盖一件事：**把韩语五份分级教案翻译进 `explainPedagogy.ts`，让 TOPIK 解题答疑视频按级别精准讲解**。
+> **状态（2026-11-23）：已完成。** TOPIK 1–6 级六套 LevelProfile 已落地 `explainPedagogy.ts`
+> 并实跑验收通过，实施记录见 §8。本文其余章节保留原规划过程，供追溯。
+>
+> 本文档只覆盖一件事：**把韩语分级教案翻译进 `explainPedagogy.ts`，让 TOPIK 解题答疑视频按级别精准讲解**。
 > 解题答疑视频本身的架构、流水线、共享缓存、双语讲师，全部见《HANDOVER-EXPLAIN-VIDEO.md》
 > （同目录），本文不重复，只引用章节号。
 
@@ -181,3 +184,55 @@ token 预估不用动：韩语谚文在 tokenizer 里的密度与日语假名接
 > 按交接文档把韩语 1–5 级教案翻译成 `explainPedagogy.ts` 里的五套 LevelProfile
 > （topik1–topik5，TOPIK 6 级回落 5 级），resolveLevelProfile 从「TOPIK N 级」提取级别，
 > 三档机制与语种校验不动，完成后用 TOPIK 3 级文章实跑 short 档验证并校准韩语语速参数。
+
+---
+
+## 8. 实施记录（2026-11-23，已完成）
+
+### 8.1 与原规划的两处偏差（均为升级，不是走样）
+
+1. **topik1–topik6 六套，不是五套**。原规划「6 级回落 topik5」的前提是 6 级教案不存在；
+   用户随后补齐了《韩语6级精读课通用教案》，且 5/6 级教案有明确的分工衔接句
+   （5 级「不做 6 级的双文本统合」），因此直接实现 topik6：关系矩阵 + 引用还原 +
+   语域三同步 + 反讽线索（教案原文四条主线）。
+2. **教案以豆包 2026-11-22 最新版为准**。六份教案已用最新版覆盖固化到
+   `docs/教案/韩语/`（旧版 1–5 级与本版有措辞级差异，新版补齐了 1–6 级的取舍边界）。
+
+### 8.2 代码落点（全部在 `explainPedagogy.ts`，其他文件零改动）
+
+- `LevelBand`：删 `topik`，加 `topik1`–`topik6`；
+- `PROFILES`：六套画像逐条取自教案（learner=学情分析错因、entry=导入环节教师动作、
+  tools=重难点解决手段+过程表追问句、trapNames=附录A考查点、sample=谚文旁白示范）；
+- `resolveLevelProfile`：`/TOPIK\s*([1-6])/i` 提取（兼容无空格写法），无级别韩语回落 `topik3`；
+- 七拍骨架、`DEPTH_PLANS`、`buildPedagogyPrompt` 结构、语种硬校验、TTS 音色全部未动。
+
+### 8.3 验证结果
+
+| 项 | 结果 |
+|---|---|
+| `npx tsc --noEmit` | ✅ 全绿 |
+| 级别映射（15 组断言） | ✅ TOPIK 1–6 级逐级命中；TOPIK3 无空格 → topik3；「TOPIK 6 级合格」→ topik6；无级别韩语 → topik3；N1–N5 日语回归不变 |
+| 级别隔离 | ✅ topik1/2 提示词无 주장/양보/强度尺/关系矩阵/括号法 等高级术语 |
+| 谚文 sample | ✅ 六套 sample 谚文占比 0.63–0.72（阈值 0.08） |
+| 接口冒烟（4398 实例） | ✅ estimate 端点：TOPIK 4 级文章 → band topik4、TOPIK 2 级 → topik2，三档预估正常 |
+| 实跑 short 档（TOPIK 4 级文章，3 题） | ✅ scriptCalls 1、无截断无抢救；`avgCharsPerQuestion=201`（区间上限 200，贴线达标）；旁白谚文占比 0.60–0.79 全镜合格；成片 114.9s；总消耗 20 839 token（tokIn 7 552 / tokOut 13 287，思考型模型输出偏高，见主文档 §13.10） |
+| 旁白内容抽查 | ✅ 出现「양보와 주장」「'그러나' 뒤」等 4 级打法，无 1–2 级内容混入 |
+
+### 8.4 韩语语速实测（缓存影响与校准口径）
+
+- band 由 `topik` → `topikN` 使旧韩语片 hash 全部失配——预期行为，旧片本就是不分级的产物。
+- 实测成片：旁白 637 字 / 语音 114.2s ≈ **0.179 s/字**，与 `secondsFor` 现值 0.21 偏差
+  14.6%，**未过 15% 行动阈值**，故本次不加 `ko` 分支、参数维持 0.21。
+  样本仅 1 次（short 档 3 题），下次 medium 档实跑后若仍 < 0.185，再落 `ko: 0.18` 分支。
+- token 预估未动：韩语谚文 tokenizer 密度与日语假名接近，实测 tokOut/镜 ≈ 1 208
+  （13 287 / 11 镜）高于 `tokensPerShot 440`，主因是思考型模型的 reasoning 输出计入
+  completion（与主文档 §13.10 同因），不是韩语旁白变长；旁白本体 637 字在计划区间内。
+
+### 8.5 验收清单核对
+
+- [x] `LevelBand` 含 `topik1`–`topik6`，`PROFILES.topik` 已删除，tsc 全绿
+- [x] 「TOPIK 1 级」→ topik1 …「TOPIK 6 级」→ topik6、无级别韩语 → topik3
+- [x] 六个 profile 的 learner/tools/trapNames 能在教案原文里逐条找到出处
+- [x] TOPIK 4 级文章实跑 `short` 一档：旁白谚文占比合格、avgChars 达标、估时偏差 < 15%
+- [x] 日语五级回归：`resolveLevelProfile` 对 N1–N5 行为不变
+- [x] 《HANDOVER-EXPLAIN-VIDEO.md》§13.2 表格补韩语六级映射
