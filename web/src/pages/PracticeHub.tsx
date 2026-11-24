@@ -7,6 +7,13 @@ import type { PracticeOverview } from '../types';
 
 const LANG_CN: Record<string, string> = { en: '英语', ja: '日语', ko: '韩语' };
 
+/** 分数换算举例要跟着语种走：韩语页面上写「托福 0–5」会让人误以为跑错了考试 */
+const SCALE_EXAMPLE: Record<string, string> = {
+  en: '托福 0–5、雅思 Band、六级 15 分',
+  ja: 'JLPT 合格线、EJU 記述 50 点',
+  ko: 'TOPIK 写作 100 分、TOPIK 말하기 100 分',
+};
+
 export default function PracticeHub() {
   const { plan } = useApp();
   const [data, setData] = useState<PracticeOverview | null>(null);
@@ -164,7 +171,9 @@ export default function PracticeHub() {
           <SectionCard title="评分怎么来的">
             <ul className="tight-list">
               <li>按目标考试的官方维度加权：内容、结构、语言、词汇（口语另含流利度与语音）。</li>
-              <li>综合分 0–100，同时换算成考试分制（如托福 0–5、雅思 Band、六级 15 分）。</li>
+              <li>
+                综合分 0–100，同时换算成考试分制（如{SCALE_EXAMPLE[plan.language] ?? SCALE_EXAMPLE.en}）。
+              </li>
               <li>已配置大模型时逐句批改；未配置时用可量化的启发式规则（篇幅、衔接、错误检测、重复率）。</li>
               <li>口语的「语音」维度只能估算，务必回听录音自行核对。</li>
             </ul>

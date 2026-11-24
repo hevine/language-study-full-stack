@@ -56,6 +56,18 @@ export function findExam(examId: string): ExamDef {
   throw new Error(`未知考试：${examId}`);
 }
 
+/**
+ * 某个考试属于哪门语言；未知考试返回 null。
+ * 命题 / 评分要按「当前计划语种」走，不能只看 examId——
+ * 否则历史上存下来的跨语种 examId 会把托福的模板套到韩语计划上。
+ */
+export function findExamLanguage(examId: string): Language | null {
+  for (const lang of Object.values(CATALOG)) {
+    if (lang.exams.some((item) => item.id === examId)) return lang.id;
+  }
+  return null;
+}
+
 export function findLevel(language: Language, levelId: string): LevelDef {
   const level = CATALOG[language].levels.find((item) => item.id === levelId);
   if (!level) throw new Error(`未知等级：${levelId}`);

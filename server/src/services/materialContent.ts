@@ -200,6 +200,7 @@ export function buildMaterialArticle(params: {
   return {
     article: {
       id: `material-${ctx.material.id}-${ctx.unit.idx}-${mode}`,
+      language,
       kind: 'intensive',
       title: `${ctx.unit.title}`,
       body,

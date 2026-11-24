@@ -591,6 +591,8 @@ export interface SettingsResponse {
 export type PracticeKind = 'write' | 'speak';
 
 export interface PracticePrompt {
+  /** 出题时所用的语种：后端据此判断旧题是否作废 */
+  language?: Language;
   kind: PracticeKind;
   formatLabel: string;
   taskType: string;

@@ -1,6 +1,9 @@
 import type { DimensionId, PracticeKind } from './rubrics';
+import type { Language } from './language';
 
 export interface PracticePrompt {
+  /** 这道题是按哪个语种出的：切换语种后据此判断旧题是否还能用 */
+  language: Language;
   kind: PracticeKind;
   formatLabel: string;
   taskType: string;

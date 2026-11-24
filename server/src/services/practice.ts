@@ -4,6 +4,7 @@ import type { Task } from '../domain/types';
 import type { GeneratedDay, PlanRecord } from '../domain/types';
 import type { PracticeAttempt, PracticePrompt, PracticeTaskBrief, SubmissionSource } from '../domain/practice';
 import { rubricFor, type PracticeFormat, type PracticeKind } from '../domain/rubrics';
+import { profileOf, type Language } from '../domain/language';
 import { pickPrompt } from '../content/prompts';
 import { ValidationError } from '../lib/errors';
 import { logger } from '../lib/logger';
@@ -35,7 +36,13 @@ const PromptSchema = z.object({
   checklist: z.array(z.string()).min(1),
 });
 
-function buildPromptMessages(
+/**
+ * 命题提示词按「计划语种」分叉，不是按 examId 分叉。
+ * 曾经这里只有 ja 与「默认英文」两条分支，韩语计划因此拿到了
+ * 「熟悉托福/雅思的英语命题人」+ 英文题干的题目——语种切换看起来生效了，
+ * 生成的却还是托福任务。新增语种时必须在这里补一支，不能落到英文兜底。
+ */
+export function buildPromptMessages(
   plan: PlanRecord,
   day: GeneratedDay,
   format: PracticeFormat,
@@ -44,6 +51,9 @@ function buildPromptMessages(
   const language = getLanguage(plan.language);
   const level = language.levels.find((item) => item.id === plan.currentLevelId);
   const target = exam.targets.find((item) => item.score === plan.targetScore) ?? exam.targets[0];
+  const lengthLine = format.wordRange
+    ? `${format.wordRange[0]}–${format.wordRange[1]} ${profileOf(plan.language).unitLabel}`
+    : '不限';
 
   if (plan.language === 'ja') {
     return [
@@ -79,6 +89,46 @@ function buildPromptMessages(
 1. テーマ「${day.theme}」に直結する内容にすること。
 2. scenario と question は日本語、hints と checklist は中国語で書くこと。
 3. hints は抽象論ではなく「何をどの順番で書くか」が分かる具体性にすること。`,
+      },
+    ];
+  }
+
+  if (plan.language === 'ko') {
+    return [
+      {
+        role: 'system',
+        content: `당신은 한국어능력시험(TOPIK) 출제위원입니다. 학습자가 그대로 연습할 수 있는 과제를 1개 만듭니다.
+- 과제는 반드시 오리지널이어야 하며, 기출문제를 그대로 쓰지 않습니다.
+- 난이도는 지정된 급수에 맞춥니다.
+- 출력은 JSON만. 설명문이나 코드블록은 붙이지 않습니다.`,
+      },
+      {
+        role: 'user',
+        content: `다음 조건으로 「${format.label}」 연습 과제를 1개 만들어 JSON으로 출력하시오.
+
+【시험】${exam.name} / 목표: ${target.label}
+【학습 단계】${day.phaseName} (${day.weekIndex + 1}주차)
+【오늘의 주제】${day.theme}
+【학습자 수준】${level?.name ?? plan.currentLevelName} (${level?.cefr ?? ''})
+【과제 유형】${format.taskType}
+【분량·시간】${lengthLine} / ${format.minutes}분
+
+출력할 JSON:
+{
+  "title": "과제 제목 (한국어, 20자 이내)",
+  "scenario": "과제 배경·상황 설명 (한국어, 2~3문장)",
+  "stimulus": null,
+  "question": "학습자에게 주는 구체적 지시 (한국어, 1~2문장. 분량과 입장 제시 포함)",
+  "hints": ["구성 힌트 (중국어, 2~3개)"],
+  "checklist": ["제출 전 자기 점검 (중국어, 3~4개)"]
+}
+
+조건:
+1. 주제 「${day.theme}」와 직접 연결될 것.
+2. scenario와 question은 한국어, hints와 checklist는 중국어로 쓸 것.
+3. hints는 추상론이 아니라 "무엇을 어떤 순서로 쓸지"가 보이게 구체적으로 쓸 것.
+4. TOPIK 실제 출제 형식을 따를 것: 쓰기는 서론—본론—결론 구조의 설명문, 말하기는 의견 제시형으로 낼 것.
+5. 초급 수준이면 해요체, 중급 이상은 습니다체·한다체 중 하나로 어미를 통일하도록 지시할 것.`,
       },
     ];
   }
@@ -127,8 +177,10 @@ function buildPromptFromFormat(
   template: ReturnType<typeof pickPrompt>,
   source: 'llm' | 'library',
   model: string | null,
+  language: Language,
 ): PracticePrompt {
   return {
+    language,
     kind: format.kind,
     formatLabel: format.label,
     taskType: format.taskType,
@@ -163,7 +215,11 @@ async function ensurePrompt(
   options: { allowLlm?: boolean } = {},
 ): Promise<{ prompt: PracticePrompt; generated: boolean }> {
   const cached = getPrompt(day.id, task.id);
-  if (cached) return { prompt: cached, generated: false };
+  // 语种或评分标准变了，旧题目立即作废：不能让韩语计划继续展示
+  // 之前按托福/雅思生成并缓存的那道题（这正是「切了语种却还是托福任务」的另一半原因）
+  if (cached && cached.language === plan.language && cached.formatLabel === format.label) {
+    return { prompt: cached, generated: false };
+  }
 
   const seed = day.weekIndex * 7 + day.dayIndex + (format.kind === 'speak' ? 3 : 0);
   const template = pickPrompt(plan.examId, plan.language, format.kind, seed);
@@ -188,6 +244,7 @@ async function ensurePrompt(
         },
         'llm',
         config.usedModel ?? config.model,
+        plan.language,
       );
       savePrompt({ planId: plan.id, dayId: day.id, taskId: task.id, kind: format.kind, payload: prompt });
       return { prompt, generated: true };
@@ -199,7 +256,7 @@ async function ensurePrompt(
     }
   }
 
-  const prompt = buildPromptFromFormat(format, template, 'library', null);
+  const prompt = buildPromptFromFormat(format, template, 'library', null, plan.language);
   savePrompt({ planId: plan.id, dayId: day.id, taskId: task.id, kind: format.kind, payload: prompt });
   return { prompt, generated: true };
 }

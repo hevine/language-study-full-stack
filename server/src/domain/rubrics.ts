@@ -1,4 +1,6 @@
 import type { Language } from '../catalog/types';
+import { findExamLanguage } from '../catalog';
+import { logger } from '../lib/logger';
 
 export type PracticeKind = 'write' | 'speak';
 
@@ -341,7 +343,103 @@ const JLPT_SPEAKING: PracticeFormat = {
   remarks: ['60 秒约 180–240 字，先给结论再补理由。', '录音回听时重点听助词是否吞音。'],
 };
 
+const TOPIK_WRITING: PracticeFormat = {
+  kind: 'write',
+  label: 'TOPIK Ⅱ 쓰기（说明文）',
+  taskType: '30 分钟，就给定主题写 200–300 字说明文（TOPIK Ⅱ 写作 53 题题型）',
+  minutes: 30,
+  wordRange: [200, 300],
+  dimensions: [
+    {
+      id: 'content',
+      name: '内容与课题执行',
+      weight: 0.35,
+      criteria: '是否准确执行题目要求（主题限定、字数、说明文结构），主张是否单一明确，理由是否具体、与题目直接相关。',
+    },
+    {
+      id: 'organization',
+      name: '结构与连贯',
+      weight: 0.25,
+      criteria: '是否符合「서론—본론—결론」三段，段内是否只有一个中心，그러나 / 따라서 / 예를 들면 等连接成分是否自然而不堆砌。',
+    },
+    {
+      id: 'language',
+      name: '语法与语尾',
+      weight: 0.25,
+      criteria: '助词（은/는·이/가·을/를）与语尾（-ㅂ니다/습니다、-다 体、连接语尾）是否正确，时制是否一致，书面语体中是否混入口语说法。',
+    },
+    {
+      id: 'lexical',
+      name: '词汇与表达',
+      weight: 0.15,
+      criteria: '汉字词与固有词的搭配是否自然，是否使用与主题匹配的表达，是否避免同一句式与同一语尾反复出现。',
+    },
+  ],
+  scale: {
+    max: 100,
+    step: 1,
+    label: 'TOPIK 写作 0–100',
+    note: 'TOPIK Ⅱ 写作满分 100；说明文（53 题）通常要求 200–300 字，评分为「课题执行 + 语言使用」两项合计',
+  },
+  remarks: [
+    '说明文只要把「무엇인가 — 왜 그런가 — 어떻게 할 것인가」写满三段，不必写成立场论说文。',
+    '语尾统一：正式书面语用 -ㅂ니다/습니다 或 -다 体，中途不要切换成 해요 体。',
+  ],
+};
+
+const TOPIK_SPEAKING: PracticeFormat = {
+  kind: 'speak',
+  label: 'TOPIK 말하기（의견 제시）',
+  taskType: '40 秒准备 + 60 秒作答，就给定话题表明观点并用具体理由支撑',
+  minutes: 4,
+  prepSeconds: 40,
+  responseSeconds: 60,
+  dimensions: [
+    {
+      id: 'content',
+      name: '内容与切题',
+      weight: 0.3,
+      criteria: '是否直接回答问题并给出明确立场，理由是否具体（含经验、数据或场景细节），有无跑题或空泛套话。',
+    },
+    {
+      id: 'fluency',
+      name: '流利与连贯',
+      weight: 0.25,
+      criteria: '语速是否自然、停顿是否落在语节边界，是否避免大量 음 / 어 / 그니까 填充词与自我重复。',
+    },
+    {
+      id: 'language',
+      name: '语法与词汇',
+      weight: 0.25,
+      criteria: '助词与语尾是否准确，是否混用敬语层级（해요 体 / 습니다 体），词汇是否地道而非直译。',
+    },
+    {
+      id: 'pronunciation',
+      name: '发音与语调',
+      weight: 0.2,
+      criteria: '收音（받침）、连音（연음）、紧音化是否清楚，语句重音与句末语调是否自然（结合录音回听判断）。',
+    },
+  ],
+  scale: {
+    max: 100,
+    step: 1,
+    label: 'TOPIK 말하기 0–100',
+    note: 'TOPIK 말하기 满分 100；正式题型为 6 题机考，此处按「意见提出」题型训练日常输出',
+  },
+  remarks: [
+    '60 秒大约 120–160 个语节（띄어쓰기 单位），开口第一句就给立场。',
+    '录音回听重点：收音是否吞掉、句末语调是否一路平掉。',
+  ],
+};
+
 const DEFAULT_EN: ExamRubric = { writing: IELTS_WRITING, speaking: IELTS_SPEAKING };
+
+/** 语种级的兜底：即使计划里存了不认识的 examId，也不会把英语模板套到日韩语上 */
+const BY_LANGUAGE: Record<Language, ExamRubric> = {
+  en: DEFAULT_EN,
+  ja: { writing: JLPT_WRITING, speaking: JLPT_SPEAKING },
+  ko: { writing: TOPIK_WRITING, speaking: TOPIK_SPEAKING },
+};
 
 const RUBRICS: Record<string, ExamRubric> = {
   toefl: { writing: TOEFL_WRITING, speaking: TOEFL_SPEAKING },
@@ -349,14 +447,27 @@ const RUBRICS: Record<string, ExamRubric> = {
   cet6: { writing: CET6_WRITING, speaking: TOEFL_SPEAKING },
   kaoyan: { writing: KAOYAN_WRITING, speaking: TOEFL_SPEAKING },
   jlpt: { writing: JLPT_WRITING, speaking: JLPT_SPEAKING },
+  topik: { writing: TOPIK_WRITING, speaking: TOPIK_SPEAKING },
 };
 
+/**
+ * 取评分格式。以「计划语种」为准：
+ * examId 属于别的语种时（历史数据 / 手改库），退回本语种的标准，
+ * 宁可少一点考试针对性，也不能让韩语计划按托福 rubric 打分。
+ */
 export function rubricFor(examId: string, language: Language, kind: PracticeKind): PracticeFormat {
   const key = kind === 'write' ? 'writing' : 'speaking';
-  const entry = RUBRICS[examId];
-  if (entry) return entry[key];
-  const fallback = language === 'ja' ? { writing: JLPT_WRITING, speaking: JLPT_SPEAKING } : DEFAULT_EN;
-  return fallback[key];
+  const examLanguage = findExamLanguage(examId);
+  if (examLanguage && examLanguage !== language) {
+    logger.warn('考试与计划语种不一致，已按计划语种评分', { examId, examLanguage, language });
+    return BY_LANGUAGE[language][key];
+  }
+  return (RUBRICS[examId] ?? BY_LANGUAGE[language] ?? DEFAULT_EN)[key];
+}
+
+/** 当前语种下，某类练习是否有专门的评分标准（供前端提示用） */
+export function hasLanguageRubric(language: Language): boolean {
+  return Boolean(BY_LANGUAGE[language]);
 }
 
 /** 0–100 综合分换算成考试分制 */

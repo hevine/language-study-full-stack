@@ -6,7 +6,7 @@ import { KO_LIBRARY } from '../content/library.ko';
 import { KO_LIBRARY_EXTRA } from '../content/library.ko.extra';
 import type { ArticlePayload, DayPayload, GeneratedDay, PlanRecord } from '../domain/types';
 import { logger } from '../lib/logger';
-import { listDayContents, saveDayContent, type ArticleRecord } from '../repositories/content';
+import { listDayContents, saveDayContent, deleteDayContents, type ArticleRecord } from '../repositories/content';
 import { currentUserId } from '../auth/requestScope';
 import { upsertWords } from '../repositories/vocab';
 import { requireLanguage } from '../domain/language';
@@ -117,7 +117,18 @@ export interface EnsureContentResult {
 export async function ensureDayContent(plan: PlanRecord, day: GeneratedDay): Promise<EnsureContentResult> {
   const existing = listDayContents(day.id);
   if (existing.length > 0) {
-    return { articles: existing, source: 'cached', notice: null };
+    // 语种守卫：缓存里若是别的语种的文章（历史数据、切语种前后串库），
+    // 一律作废重生成——不能让韩语计划的精读页继续展示英语材料
+    const foreign = existing.filter((item) => item.language !== plan.language);
+    if (foreign.length === 0) {
+      return { articles: existing, source: 'cached', notice: null };
+    }
+    logger.warn('day content language mismatch, regenerating', {
+      dayId: day.id,
+      planLanguage: plan.language,
+      cachedLanguages: [...new Set(foreign.map((item) => item.language))],
+    });
+    deleteDayContents(day.id);
   }
 
   const { config } = resolveLlmConfig();

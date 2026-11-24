@@ -9,6 +9,7 @@ import type {
   PracticePrompt,
 } from '../domain/practice';
 import { toBand, type PracticeFormat } from '../domain/rubrics';
+import { profileOf } from '../domain/language';
 import { logger } from '../lib/logger';
 import { chatJson, resolveLlmConfig } from './llm';
 
@@ -23,6 +24,8 @@ const EN_WORD_RE = /[A-Za-z][A-Za-z'’-]*/g;
 const JA_CHAR_RE = /[\u3040-\u30ff\u4e00-\u9fff々]/g;
 const FILLERS_EN = /\b(um+|uh+|erm+|you know|i mean|sort of|kind of|basically|actually|like)\b/gi;
 const FILLERS_JA = /(えーと|えっと|あのー|そのー|なんか|まあ)/g;
+/** 韩语的单音节填充词必须「独立成词」才算：어/음 出现在 어려움、생각합니다 里是正常词汇，不是填充词 */
+const FILLERS_KO = /(?<![가-힣])(?:음+|어+|그+|저기|약간|뭐|그니까|뭐였지)(?![가-힣])/g;
 
 const CONNECTIVES_EN = [
   'however', 'moreover', 'furthermore', 'therefore', 'thus', 'consequently', 'in addition',
@@ -357,7 +360,13 @@ function analyze(
       0,
     );
     const stance = (clean.match(STANCE_KO) ?? []).length;
-    const fillers = countFillers ? (clean.match(/음|어|그니까|뭐였지/g) ?? []).length : 0;
+    const fillers = countFillers ? (clean.match(FILLERS_KO) ?? []).length : 0;
+
+    // 语体一致性：TOPIK 评分里 해요体与 습니다体混排是明确扣分项
+    const polite = (clean.match(/(어요|아요|해요|예요|이에요)/g) ?? []).length;
+    const formal = (clean.match(/(습니다|ㅂ니다|입니다)/g) ?? []).length;
+    const plain = (clean.match(/(한다|된다|이다|있다|없다)(?=[.\n]|$)/g) ?? []).length;
+    const styleMix = polite >= 2 && formal + plain >= 2;
 
     const stats: GradeStats = {
       unit: 'words',
@@ -380,7 +389,7 @@ function analyze(
       stance,
       errors: [],
       endingRepeat: 0,
-      styleMix: false,
+      styleMix,
       advancedRatio,
     };
   }
@@ -481,7 +490,7 @@ function buildIssuesFromMetrics(
   const issues: GradeIssue[] = [...analysis.errors];
   const { stats } = analysis;
   const target = format.wordRange?.[0] ?? null;
-  const unitLabel = language === 'ja' ? '字' : language === 'ko' ? '语节' : '词';
+  const unitLabel = profileOf(language).unitLabel;
 
   if (target && stats.length < target * 0.85) {
     issues.push({
@@ -553,6 +562,16 @@ function buildIssuesFromMetrics(
     });
   }
 
+  if (language === 'ko' && analysis.styleMix) {
+    issues.push({
+      quote: '',
+      kind: '语体',
+      problem: '해요体与 습니다体混用（口语语尾混进书面语）',
+      fix: '全文统一：说明文、议论文一律用 -ㅂ니다/습니다 或 -다 体，把 -아요/어요 全部改掉。',
+      reason: '语体不统一是 TOPIK 写作最常见的扣分点，评分类别里直接算「언어 사용」失分。',
+    });
+  }
+
   if (language === 'ja' && analysis.styleMix) {
     issues.push({
       quote: '',
@@ -580,7 +599,12 @@ function buildIssuesFromMetrics(
         quote: '',
         kind: '流利度',
         problem: `口头填充词偏多（${stats.fillerCount} 处，占 ${Math.round(fillerRate * 100)}%）`,
-        fix: '把 um / uh 换成 0.5 秒的静默停顿——停顿不扣分，填充词才扣分。',
+        fix:
+          language === 'ja'
+            ? '把「えーと」「あのー」换成 0.5 秒的静默停顿——停顿不扣分，填充词才扣分。'
+            : language === 'ko'
+              ? '把 음 / 어 / 그니까 换成 0.5 秒的静默停顿——停顿不扣分，填充词才扣分。'
+              : '把 um / uh 换成 0.5 秒的静默停顿——停顿不扣分，填充词才扣分。',
         reason: '评分官把填充词视为组织语言能力不足的信号。',
       });
     }
@@ -590,7 +614,7 @@ function buildIssuesFromMetrics(
         issues.push({
           quote: '',
           kind: '流利度',
-          problem: `语速偏慢（约 ${stats.wpm} ${stats.unit === 'chars' ? '字' : '词'}/分钟）`,
+          problem: `语速偏慢（约 ${stats.wpm} ${profileOf(language).unitLabel}/分钟）`,
           fix: '用「3 句框架」练：立场句—理由句—例子句，先保证说满时长再提速。',
           reason: '语速过慢通常意味着在逐句翻译，而不是直接用目标语组织。',
         });
@@ -635,9 +659,14 @@ function heuristicGrade(
       : clamp(44 + (stats.uniqueRatio - 0.4) * 85 + Math.min(8, analysis.advancedRatio * 40), 40, 92),
   );
 
-  const developmentMarkers = (
-    input.text.match(/\b(because|for example|for instance|such as|since|which means|as a result)\b/gi) ?? []
-  ).length;
+  // 论证展开标记必须按语种取：用英文正则去数韩语作文，结果永远是 0，内容分被系统性压低
+  const developmentPattern =
+    language === 'ja'
+      ? /(なぜなら|だから|そのため|たとえば|例えば|したがって|つまり|というのは)/g
+      : language === 'ko'
+        ? /(왜냐하면|때문에|그래서|따라서|예를 들면|예컨대|즉|그러므로|라는 뜻)/g
+        : /\b(because|for example|for instance|such as|since|which means|as a result)\b/gi;
+  const developmentMarkers = (input.text.match(developmentPattern) ?? []).length;
   const development = clamp(52 + developmentMarkers * 11, 52, 92);
 
   // 内容分不能脱离语言与结构：一篇错误密集或不分段的文章，不可能"内容优秀"
@@ -712,7 +741,7 @@ function dimensionComment(
   analysis: Analysis,
   language: Language,
 ): string {
-  const unit = language === 'ja' ? '字' : '词';
+  const unit = profileOf(language).unitLabel;
   switch (id) {
     case 'content':
       return score >= 80
@@ -726,13 +755,17 @@ function dimensionComment(
           : `共 ${stats.paragraphs} 段，衔接词 ${analysis.connectives} 处；段间过渡还可以更明确。`;
     case 'language':
       return analysis.errors.length === 0
-        ? '未检出常见语法错误（主谓一致、冠词、标点间距等常规规则均通过）。'
+        ? language === 'ja'
+          ? '未检出常见语法问题（助词、活用、时态与文体一致性均通过）。'
+          : language === 'ko'
+            ? '未检出常见语法问题（助词、语尾、时制与文体一致性均通过）。'
+            : '未检出常见语法错误（主谓一致、冠词、标点间距等常规规则均通过）。'
         : `检出 ${analysis.errors.length} 类常见错误，多为${[...new Set(analysis.errors.map((item) => item.problem))].slice(0, 2).join('、')}。`;
     case 'lexical':
       return `去重比 ${stats.uniqueRatio}（越低越重复）。${score >= 80 ? '词汇使用较多样。' : '高频词重复明显，建议做同义替换。'}`;
     case 'fluency':
       return stats.fillerCount === 0
-        ? `未检出填充词，语速 ${stats.wpm ?? '—'} ${stats.unit === 'chars' ? '字' : '词'}/分钟。`
+        ? `未检出填充词，语速 ${stats.wpm ?? '—'} ${profileOf(language).unitLabel}/分钟。`
         : `填充词 ${stats.fillerCount} 处，语速 ${stats.wpm ?? '—'}。把填充词换成静默停顿即可明显改善。`;
     case 'pronunciation':
       return '该维度无法仅凭文本判断：分数按转写置信度与录音回听估算，请务必回放自己的录音核对长音、重音与语调。';
@@ -745,7 +778,7 @@ function buildStrengths(dimensions: GradeDimension[], stats: GradeStats, languag
   const top = [...dimensions].sort((a, b) => b.score - a.score).slice(0, 2);
   const list = top.map((item) => `${item.name} ${item.score} 分：${item.comment}`);
   if (stats.length > 0) {
-    list.push(`完成了 ${stats.length} ${language === 'ja' ? '字' : '词'}的实际输出——这一步比分数更重要。`);
+    list.push(`完成了 ${stats.length} ${profileOf(language).unitLabel}的实际输出——这一步比分数更重要。`);
   }
   return list.slice(0, 3);
 }
@@ -780,7 +813,23 @@ function buildDrills(dimensions: GradeDimension[], format: PracticeFormat, langu
     pronunciation: '朗读本次作文并录音，重点听冠词与词尾是否吞音。',
   };
 
-  const map = language === 'ja' ? JA_MAP : format.kind === 'speak' ? EN_SPEAK_MAP : EN_WRITE_MAP;
+  const KO_MAP: Record<string, string> = {
+    content: '同一道题再说一遍：立场句之后必须跟一个具体的经验或数据（언제·어디서·결과），不要只讲道理。',
+    organization: '按「주장—근거—정리」三段重写或重说一遍，段首分别用 먼저 / 또한 / 따라서。',
+    language: '挑出本次答案里 5 个句子，逐个核对助词（은/는·이/가·을/를）与语尾（-ㅂ니다/습니다 或 -어요）是否统一。',
+    lexical: '为本题准备 8 个话题词（汉字词 4 + 固有词 4），每个各造一句。',
+    fluency: '重说 60 秒：把 음 / 어 / 그니까 全部换成 0.5 秒停顿，目标是把填充词压到 0 次。',
+    pronunciation: '跟读范文音频 3 遍，专练收音（받침）与连音（연음），再录一次对比。',
+  };
+
+  const map =
+    language === 'ja'
+      ? JA_MAP
+      : language === 'ko'
+        ? KO_MAP
+        : format.kind === 'speak'
+          ? EN_SPEAK_MAP
+          : EN_WRITE_MAP;
   const list = weakest.map((item) => map[item.id] ?? `针对${item.name}再做一次专项练习。`);
   list.push(
     format.kind === 'speak'
@@ -790,29 +839,30 @@ function buildDrills(dimensions: GradeDimension[], format: PracticeFormat, langu
   return list.slice(0, 3);
 }
 
+/** 「更地道的说法」建议：按语种各一套，不能把日语的口语替换规则套到韩语作文上 */
+const UPGRADES_BY_LANGUAGE: Record<Language, Array<{ from: RegExp; to: string; note: string }>> = {
+  en: ADVANCED_UPGRADES,
+  ja: [
+    { from: /とても/g, to: '非常に / 極めて', note: '「とても」は口語的。文章では「非常に」或用具体程度表现。' },
+    { from: /思う/g, to: '考える / 主張する', note: '意見文では「思う」より「考える」が適切。' },
+    { from: /たくさんの/g, to: '多くの', note: '「たくさんの」は口語寄り。' },
+    { from: /でも/g, to: 'しかし', note: '逆接は「しかし」に統一すると文体が引き締まる。' },
+  ],
+  ko: [
+    { from: /너무/g, to: '매우 / 상당히', note: '「너무」偏口语；书面语用 매우 / 상당히 更稳。' },
+    { from: /근데/g, to: '그러나 / 하지만', note: '「근데」是口语，书面语统一用 그러나 / 하지만。' },
+    { from: /그래서/g, to: '따라서 / 그러므로', note: '书面论证里 그래서 显得随意，换成 따라서 / 그러므로。' },
+    { from: /좋은 것 같아요|좋은 것 같다/g, to: '바람직하다 / 효과적이다', note: '「것 같다」把主张说软了；TOPIK 写作要给明确判断。' },
+  ],
+};
+
 function buildUpgrades(text: string, language: Language): Array<{ from: string; to: string; note: string }> {
   const upgrades: Array<{ from: string; to: string; note: string }> = [];
-  if (language === 'en') {
-    for (const item of ADVANCED_UPGRADES) {
-      item.from.lastIndex = 0;
-      const match = text.match(item.from);
-      if (match) {
-        upgrades.push({ from: match[0], to: item.to, note: item.note });
-      }
-      if (upgrades.length >= 4) break;
-    }
-  } else {
-    const map: Array<{ from: RegExp; to: string; note: string }> = [
-      { from: /とても/g, to: '非常に / 極めて', note: '「とても」は口語的。文章では「非常に」或用具体程度表现。' },
-      { from: /思う/g, to: '考える / 主張する', note: '意見文では「思う」より「考える」が適切。' },
-      { from: /たくさんの/g, to: '多くの', note: '「たくさんの」は口語寄り。' },
-      { from: /でも/g, to: 'しかし', note: '逆接は「しかし」に統一すると文体が引き締まる。' },
-    ];
-    for (const item of map) {
-      const match = text.match(item.from);
-      if (match) upgrades.push({ from: match[0], to: item.to, note: item.note });
-      if (upgrades.length >= 4) break;
-    }
+  for (const item of UPGRADES_BY_LANGUAGE[language] ?? []) {
+    item.from.lastIndex = 0;
+    const match = text.match(item.from);
+    if (match) upgrades.push({ from: match[0], to: item.to, note: item.note });
+    if (upgrades.length >= 4) break;
   }
   return upgrades;
 }
@@ -903,8 +953,38 @@ const LlmGradeSchema = z.object({
   drills: z.array(z.string()).default([]),
 });
 
-function buildGradePrompt(input: GradeInput, analysis: Analysis): Array<{ role: 'system' | 'user'; content: string }> {
+/**
+ * 评分官的「身份」必须跟着计划语种走。
+ * 之前只有 ja / 英文两支，韩语作文会被「托福/雅思评分官」按英语标准评，
+ * 连 quote / fix 都要求写成英文——打分维度与语言判断都是错的。
+ */
+const GRADE_SYSTEM: Record<Language, string> = {
+  ja: `あなたは JLPT／EJU の記述・口述試験を採点してきた日本語教師です。学習者の解答を、提示された評価観点と配点に厳密に従って採点します。
+原則：
+- 甘い点は付けない。ただし改善可能な具体的根拠を示す。
+- 指摘は必ず原文の該当箇所を引用し、どう直すかを提示する。
+- 褒めるのは具体的に良かった点のみ。空虚な励ましは書かない。
+- 出力は JSON のみ。説明文やコードブロックは付けない。`,
+  ko: `你是一位有十年经验的 TOPIK 写作与口语评分官，熟悉韩国语能力考试（TOPIK Ⅱ 쓰기 / TOPIK 말하기）的评分标准与常见失分点。
+评分原则：
+- 严格按给定维度与权重打分，不虚高；同一篇答案在不同维度间要能自洽。
+- 每条问题必须引用学员原文片段（韩文逐字，不要改写），并给出可直接替换的韩文改法。
+- 重点看 TOPIK 的固定扣分点：助词（은/는·이/가·을/를）缺失或误用、语尾层级混用（해요体与습니다体混排）、连接语尾接续错误、汉字词与固有词搭配生硬。
+- 表扬只写具体的、可复现的优点，不要写空泛鼓励。
+- 你是批改者不是代笔：rewrite 只做语言层面的修正，不要替学生重写整篇论证。
+- 只输出 JSON，不要解释文字、不要 markdown 代码块。`,
+  en: `你是一位有十年经验的托福/雅思/四六级写作与口语评分官，熟悉官方 rubric 与常见失分点。
+评分原则：
+- 严格按给定维度与权重打分，不虚高；同一篇答案在不同维度间要能自洽。
+- 每条问题必须引用原文片段（逐字，不要改写），并给出可直接替换的改后写法。
+- 表扬只写具体的、可复现的优点，不要写空泛鼓励。
+- 你是批改者不是代笔：rewrite 只做语言层面的修正，不要替学生重写整篇论证。
+- 只输出 JSON，不要解释文字、不要 markdown 代码块。`,
+};
+
+export function buildGradePrompt(input: GradeInput, analysis: Analysis): Array<{ role: 'system' | 'user'; content: string }> {
   const { format, prompt, language } = input;
+  const languageProfile = profileOf(language);
   const dims = format.dimensions
     .map(
       (dimension, index) =>
@@ -912,22 +992,9 @@ function buildGradePrompt(input: GradeInput, analysis: Analysis): Array<{ role: 
     )
     .join('\n');
 
-  const system = language === 'ja'
-    ? `あなたは JLPT／EJU の記述・口述試験を採点してきた日本語教師です。学習者の解答を、提示された評価観点と配点に厳密に従って採点します。
-原則：
-- 甘い点は付けない。ただし改善可能な具体的根拠を示す。
-- 指摘は必ず原文の該当箇所を引用し、どう直すかを提示する。
-- 褒めるのは具体的に良かった点のみ。空虚な励ましは書かない。
-- 出力は JSON のみ。説明文やコードブロックは付けない。`
-    : `你是一位有十年经验的托福/雅思/四六级写作与口语评分官，熟悉官方 rubric 与常见失分点。
-评分原则：
-- 严格按给定维度与权重打分，不虚高；同一篇答案在不同维度间要能自洽。
-- 每条问题必须引用原文片段（逐字，不要改写），并给出可直接替换的改后写法。
-- 表扬只写具体的、可复现的优点，不要写空泛鼓励。
-- 你是批改者不是代笔：rewrite 只做语言层面的修正，不要替学生重写整篇论证。
-- 只输出 JSON，不要解释文字、不要 markdown 代码块。`;
+  const system = GRADE_SYSTEM[language];
 
-  const statsLine = `篇幅 ${analysis.stats.length} ${analysis.stats.unit === 'chars' ? '字' : '词'}｜句子 ${analysis.stats.sentences}｜段落 ${analysis.stats.paragraphs}｜平均句长 ${analysis.stats.avgSentence}｜去重比 ${analysis.stats.uniqueRatio}｜填充词 ${analysis.stats.fillerCount}｜时长 ${input.durationSeconds ?? '未记录'} 秒`;
+  const statsLine = `篇幅 ${analysis.stats.length} ${languageProfile.unitLabel}｜句子 ${analysis.stats.sentences}｜段落 ${analysis.stats.paragraphs}｜平均句长 ${analysis.stats.avgSentence}｜去重比 ${analysis.stats.uniqueRatio}｜填充词 ${analysis.stats.fillerCount}｜时长 ${input.durationSeconds ?? '未记录'} 秒`;
 
   const user = `请批改下面这份${format.kind === 'write' ? '写作' : '口语转写'}答案。
 
@@ -961,7 +1028,7 @@ ${input.text}
 1. dimensions 必须覆盖上面列出的每一个 id，不能新增或遗漏。
 2. issues 给 3–6 条，按严重程度排序；quote 必须是学生原文中真实存在的连续片段（若整篇性问题则 quote 留空字符串）。
 3. 不要因为篇幅长就给高分，也不要因为个别拼写错误就整体压低。
-4. 全部评语用中文；quote / fix / rewrite 用${language === 'ja' ? '日文' : '英文'}。`;
+4. 全部评语用中文；quote / fix / rewrite 用${languageProfile.textLabel}。`;
 
   return [
     { role: 'system', content: system },

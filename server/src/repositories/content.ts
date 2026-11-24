@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { db, parseJson } from '../db';
+import type { Language } from '../domain/language';
 import type { ArticlePayload, Question, ReadingSegment, VocabEntry } from '../domain/types';
 
 export interface ArticleRecord extends ArticlePayload {
   id: string;
+  /** 生成时的语种：缓存命中前用它校验，防止跨语种串台 */
+  language: Language;
   kind: 'intensive' | 'extensive';
   source: 'llm' | 'library' | 'material';
   model: string | null;
@@ -16,6 +19,7 @@ export interface ArticleRecord extends ArticlePayload {
 interface ContentRow {
   id: string;
   day_id: string;
+  language: string;
   kind: string;
   title: string;
   body: string;
@@ -33,6 +37,7 @@ interface ContentRow {
 function mapContent(row: ContentRow): ArticleRecord {
   return {
     id: row.id,
+    language: row.language as Language,
     kind: row.kind as ArticleRecord['kind'],
     title: row.title,
     body: row.body,
