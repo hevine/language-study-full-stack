@@ -392,6 +392,7 @@ SpeechSynthesis（朗读核心）、SpeechRecognition / webkitSpeechRecognition�
 5. **`synthesizeVoice` / `explainSegmentBlob` 返回的是 blob URL**，调用方必须 `URL.revokeObjectURL`，否则内存泄漏。
 6. **`@waiyubaodian/hevc-player` 与 `@waiyubaodian/explain-video` 是本地 `file:` 软链**，路径在 `package.json`，部署/换机需确认。
 7. **`serviceWorker`/SDK 内联 WASM 体积大**，播放器入口已做 `lazy`，新增入口请沿用。
+8. **`VoiceProvider` 必须等登录态恢复完再取音色库**（`useVoiceSystem.tsx` 里的 `authReady` / `userId` 闸门，2026-11-27 修复）。React 子组件 effect 先于父组件执行，去掉闸门会让 `/api/voices` 抢在 `AuthProvider` 静默刷新之前发出、以游客（`local`）身份拿到**别人账号的音色 id**；登录态落定后这些 id 在当前账号下不存在，朗读合成 404「音色不存在或不属于当前语种」并回退系统音色——表现出来就是「每次刷新页面都要去设置里再点一次一键启用」。同理，`useVoicePlayer` 的 404 自愈（重拉快照后按场景重绑）也不要删。
 
 ---
 
