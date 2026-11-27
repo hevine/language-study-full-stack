@@ -19,6 +19,7 @@ import {
   type KnowledgeNodeDef,
   type KnowledgeTree,
 } from '../content/knowledge';
+import { resolveVocabTags } from '../content/knowledge/questionVocab';
 
 /** 掌握度置信度的两个门槛：做满几次、做过几道不同的题，才允许下结论 */
 const CONFIDENCE_MIN_ATTEMPTS = 3;
@@ -422,6 +423,7 @@ export interface SyncStats {
  * 把卷面题同步进统一题池（幂等）。
  * 内置卷每次启动都会重排 exam_items，但内容不变 —— 所以题目身份按内容算，重排不增行。
  * 逐卷去重后一题一行；知识点按该语种的匹配规则挂主考点。
+ * 无手写匹配规则的语种（日语）走词形兜底：解析标注词升为主考点，全文命中词只作次要关联。
  */
 export function syncExamPoolQuestions(): Record<string, SyncStats> {
   const run = db.transaction(() => {
@@ -452,8 +454,10 @@ export function syncExamPoolQuestions(): Record<string, SyncStats> {
     );
     const linkPoint = db.prepare(`
       INSERT INTO question_knowledge (question_id, knowledge_point_id, weight, is_primary, source)
-      VALUES (?, ?, 1, 1, 'seed')
-      ON CONFLICT(question_id, knowledge_point_id) DO NOTHING
+      VALUES (?, ?, ?, ?, 'seed')
+      ON CONFLICT(question_id, knowledge_point_id) DO UPDATE SET
+        weight = excluded.weight,
+        is_primary = excluded.is_primary
     `);
     const hasNode = db.prepare('SELECT 1 FROM knowledge_points WHERE id = ?');
     const linked = db.prepare(
@@ -496,7 +500,24 @@ export function syncExamPoolQuestions(): Record<string, SyncStats> {
         stem: row.stem,
       });
       clearSeedLinks.run(id);
-      if (code && hasNode.get(code)) linkPoint.run(id, code);
+      if (code && hasNode.get(code)) linkPoint.run(id, code, 1, 1);
+
+      // 日语没有手写匹配规则（matchers 为空），改为按词形把题目连到 JLPT 词汇节点。
+      // 解析首引号命中的词当主考点（参与掌握度），其余只是次要关联（不参与掌握度），
+      // 这样既打通诊断证据链，又不会因为全文扫词把虚词当成考点。
+      const vocabTags = resolveVocabTags(row.language, {
+        sectionKey: row.section_key,
+        stem: row.stem,
+        explanation: row.explanation,
+      });
+      let hasPrimary = Boolean(code && hasNode.get(code));
+      for (const tag of vocabTags) {
+        if (!hasNode.get(tag.code)) continue;
+        // 已有语法主考点时，词汇节点一律次要；否则只有解析标注的考点词升为主考点
+        const primary = tag.primary && !hasPrimary;
+        linkPoint.run(id, tag.code, primary ? 1 : 0.4, primary ? 1 : 0);
+        if (primary) hasPrimary = true;
+      }
 
       stats.questions += 1;
       const count = (linked.get(id) as { n: number } | undefined)?.n ?? 0;

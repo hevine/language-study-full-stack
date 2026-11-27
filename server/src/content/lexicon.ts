@@ -3,6 +3,7 @@
  * 但对外提供同一套「按级别浏览 / 按级别取词」的接口，避免两边逻辑各写一遍。
  */
 import { JA_LEVEL_META, JA_LEVEL_ORDER, JA_WORDS, pickJaWords, type JaLevel } from './jaLexicon';
+import { JLPT_LEVEL_DESCRIPTION, JLPT_SOURCE, listJlptWords } from './jlptGraded';
 import {
   KO_LEVEL_META,
   KO_LEVEL_ORDER,
@@ -65,7 +66,7 @@ export interface LexLevelMeta {
 
 export const LEX_SOURCE: Record<LexLanguage, string> = {
   en: `${LEXICON_SOURCE}；已并入${GRADED_SOURCE()}，分级词中文释义/记忆法/例句为原创撰写`,
-  ja: '按 JLPT 出题基准的级别划分（N3 / N2 / N1）与主题分类整理，释义、记忆法、例句为原创撰写',
+  ja: `${JLPT_SOURCE()}；另并入 N3/N2/N1 原创精讲词`,
   ko: '按 TOPIK 官方级别范围与主题分类整理（1–6 级），释义、记忆法、例句为原创撰写',
 };
 
@@ -123,12 +124,16 @@ function toLexEntry(word: LexWord): LexEntry {
 
 export function lexLevels(language: LexLanguage): LexLevelMeta[] {
   if (language === 'ja') {
+    // 数量按实际浏览列表去重后的条数统计，保证界面「共 N 词」与列表一致。
+    // 口径：JLPT 总库各级别覆盖词 + 不在总库里的原创精讲词（一词只算一次）。
     return JA_LEVEL_ORDER.map((level: JaLevel) => ({
       id: level,
       name: JA_LEVEL_META[level].name,
       short: JA_LEVEL_META[level].short,
-      description: JA_LEVEL_META[level].description,
-      total: JA_WORDS.filter((word) => word.level === level).length,
+      description:
+        JLPT_LEVEL_DESCRIPTION[level.toUpperCase() as keyof typeof JLPT_LEVEL_DESCRIPTION] ??
+        JA_LEVEL_META[level].description,
+      total: listLexEntries('ja', { level }).length,
     }));
   }
   if (language === 'ko') {
@@ -185,15 +190,24 @@ export function listLexEntries(
   const { level, query } = options;
   const keyword = query?.trim().toLowerCase();
   if (language === 'ja') {
-    return JA_WORDS.filter((word) => (level ? word.level === level : true))
-      .filter((word) =>
-        keyword
-          ? [word.term, word.kana, word.cn, word.theme].some((field) =>
-              field.toLowerCase().includes(keyword),
-            )
-          : true,
-      )
-      .map((word) => ({
+    const jaLevel = level?.toUpperCase();
+    const entries: LexEntry[] = [];
+    const seen = new Set<string>();
+
+    // 第一层：原创精讲词（N3/N2/N1），字段完整，优先展示
+    for (const word of JA_WORDS) {
+      if (jaLevel && word.level.toUpperCase() !== jaLevel) continue;
+      if (
+        keyword &&
+        ![word.term, word.kana, word.cn, word.theme].some((field) =>
+          field.toLowerCase().includes(keyword),
+        )
+      ) {
+        continue;
+      }
+      const key = word.term.toLowerCase();
+      seen.add(key);
+      entries.push({
         term: word.term,
         reading: word.kana,
         pos: word.pos,
@@ -204,7 +218,41 @@ export function listLexEntries(
         syn: [],
         theme: word.theme,
         level: word.level,
-      }));
+      });
+    }
+
+    // 第二层：JLPT 总库全量词。带例句的精讲词直接补全字段；只有核心字段的标 pending。
+    for (const word of listJlptWords({ level: jaLevel })) {
+      const key = word.term.toLowerCase();
+      if (seen.has(key)) continue;
+      if (
+        keyword &&
+        ![word.term, word.kana, word.cn, word.theme].some((field) =>
+          field.toLowerCase().includes(keyword),
+        )
+      ) {
+        continue;
+      }
+      seen.add(key);
+      entries.push({
+        term: word.term,
+        reading: word.kana,
+        pos: word.pos,
+        cn: word.cn,
+        mnemonic: word.mnemonic,
+        example: word.example,
+        exampleCn: word.exampleCn,
+        syn: [],
+        theme: word.theme,
+        level: word.level.toLowerCase(),
+        code: word.code,
+        forms: word.inflections || undefined,
+        band: word.freq,
+        // 日语核心词有中文释义、可正常背诵，不标 pending（pending 专指连释义都缺的词）；
+        // 是否精讲由 example 是否为空体现，取词池也只收精讲词。
+      });
+    }
+    return entries;
   }
   if (language === 'ko') {
     return KO_WORDS.filter((word) => (level ? word.level === level : true))

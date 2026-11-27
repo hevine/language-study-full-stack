@@ -54,6 +54,8 @@ const { ensureKnowledgeBase } = await import('../server/src/services/knowledgeSe
 const { EN_TREE } = await import('../server/src/content/knowledge/en');
 const { treeFor } = await import('../server/src/content/knowledge');
 const { grammarLibrary, similarGrammarPairs } = await import('../server/src/content/grammar');
+const { vocabKnowledge } = await import('../server/src/content/knowledge/vocab');
+const { JLPT_WORDS } = await import('../server/src/content/jlptGraded');
 const { getGrammarLibrary, grammarLevelsForPlan } = await import('../server/src/repositories/grammar');
 const { grammarPatternsFor } = await import('../server/src/services/grammarBook');
 const { CATALOG } = await import('../server/src/catalog');
@@ -302,6 +304,140 @@ try {
     );
   }
   ok('没有上传语法书时，「拆句」按计划级别取内置语法库，按天轮换', { 示例: fallbackTitle });
+
+  // ---- 2d. 日语词汇图谱：JLPT 词库 → 图谱节点 → 主题/近义关系边，逐条对得上 ----
+  {
+    const words = JLPT_WORDS();
+    const derived = vocabKnowledge('ja')!;
+    const vocabNodes = derived.nodes.filter((node) => node.kind === 'vocab');
+    const topicNodes = derived.nodes.filter((node) => node.kind === 'topic');
+    assert.equal(words.length, 10010, 'JLPT 词库应为 10010 条（教研主表 10000 + 题目回补 10）');
+    assert.equal(vocabNodes.length, words.length, '词汇节点数与词库条数不一致');
+    assert.ok(topicNodes.length > 0, '缺少主题中枢节点');
+    assert.ok(
+      vocabNodes.every((node) => node.parent === 'ja.vocab' && node.sectionKey === 'vocab'),
+      '词汇节点应挂在词汇技能下且归入 vocab 分项',
+    );
+    assert.ok(
+      vocabNodes.every((node) => ['N5', 'N4', 'N3', 'N2', 'N1'].includes(node.levelBand ?? '')),
+      '词汇节点的级别档位应为 N5–N1',
+    );
+
+    // 落库核对：抽样 20 条，编码/释义/例句与词库一致
+    const sample = words.filter((_, i) => i % 500 === 0).slice(0, 20);
+    for (const word of sample) {
+      const row = db
+        .prepare('SELECT name, name_local, level_band, meta_json FROM knowledge_points WHERE id = ?')
+        .get(`ja.vocab.${word.code.toLowerCase()}`) as
+        | { name: string; name_local: string; level_band: string; meta_json: string }
+        | undefined;
+      assert.ok(row, `词汇节点未落库：${word.code}`);
+      assert.equal(row.name, word.term, `${word.code} 词形不一致`);
+      assert.equal(row.name_local, word.kana, `${word.code} 假名不一致`);
+      assert.equal(row.level_band, word.level, `${word.code} 级别不一致`);
+      const meta = JSON.parse(row.meta_json);
+      assert.equal(meta.cn, word.cn, `${word.code} 释义不一致`);
+      assert.equal(meta.example, word.example, `${word.code} 例句不一致`);
+    }
+
+    const nodeCount = count(
+      `SELECT COUNT(*) AS n FROM knowledge_points WHERE language='ja' AND kind='vocab'`,
+    );
+    assert.equal(nodeCount, words.length, '库里日语词汇节点数不对');
+    const related = count(
+      `SELECT COUNT(*) AS n FROM kp_edges e JOIN knowledge_points p ON p.id=e.from_id
+       WHERE p.language='ja' AND p.kind='vocab' AND e.type='related'`,
+    );
+    const similar = count(
+      `SELECT COUNT(*) AS n FROM kp_edges e JOIN knowledge_points p ON p.id=e.from_id
+       WHERE p.language='ja' AND p.kind='vocab' AND e.type='similar'`,
+    );
+    const oneWay = count(
+      `SELECT COUNT(*) AS n FROM kp_edges e JOIN knowledge_points p ON p.id=e.from_id
+       WHERE p.language='ja' AND p.kind='vocab' AND e.type='similar'
+         AND NOT EXISTS (SELECT 1 FROM kp_edges r WHERE r.from_id=e.to_id AND r.to_id=e.from_id AND r.type='similar')`,
+    );
+    assert.equal(related, words.length, '每个词汇节点应有一条指向主题的 related 边');
+    assert.ok(similar > 0, '近义/反义关系边未落库');
+    assert.equal(oneWay, 0, '词汇近义边没有成对展开');
+    // 10 条题目回补词必须已落库（续号词，抽样按间隔取不到）
+    for (const code of ['JP-V-N4-1501', 'JP-V-N3-1401', 'JP-V-N2-2301', 'JP-V-N1-4001']) {
+      assert.ok(
+        db.prepare('SELECT 1 FROM knowledge_points WHERE id = ?').get(`ja.vocab.${code.toLowerCase()}`),
+        `回补词节点未落库：${code}`,
+      );
+    }
+    ok('日语词汇图谱：10010 词节点 + 主题/近义关系边完整', {
+      词汇节点: nodeCount,
+      主题节点: topicNodes.length,
+      related边: related,
+      similar边: similar,
+    });
+  }
+
+  // ---- 2e. 日语题目按词形挂接词汇节点：诊断链路的作答证据来源 ----
+  {
+    const jaPool = db
+      .prepare(
+        `SELECT COUNT(*) AS questions,
+                SUM(CASE WHEN EXISTS (SELECT 1 FROM question_knowledge qk WHERE qk.question_id = q.id)
+                         THEN 1 ELSE 0 END) AS tagged
+           FROM questions q WHERE q.language = 'ja' AND q.status = 'active'`,
+      )
+      .get() as { questions: number; tagged: number };
+    assert.ok(jaPool.questions > 0, '日语题池为空');
+    assert.equal(jaPool.tagged, jaPool.questions, '有日语题没挂上词汇节点');
+
+    const links = db
+      .prepare(
+        `SELECT qk.is_primary, qk.weight, kp.kind, kp.code
+           FROM question_knowledge qk
+           JOIN questions q ON q.id = qk.question_id
+           JOIN knowledge_points kp ON kp.id = qk.knowledge_point_id
+          WHERE q.language = 'ja' AND qk.source = 'seed'`,
+      )
+      .all() as Array<{ is_primary: number; weight: number; kind: string; code: string }>;
+    assert.ok(links.length > 0, '日语题没有挂接任何知识点');
+    assert.ok(
+      links.every((link) => link.kind === 'vocab' && link.code.startsWith('ja.vocab.jp-v-')),
+      '日语题应挂到词汇节点，而不是题型或主题节点',
+    );
+    const primaries = links.filter((link) => link.is_primary === 1);
+    // 41 道词汇题应全部有主考点：18 原有 + 10 回补词 + 13 规则/映射修复
+    const vocabQuestions = count(
+      "SELECT COUNT(*) AS n FROM questions WHERE language='ja' AND status='active' AND section_key='vocab'",
+    );
+    const primaryQuestions = count(
+      `SELECT COUNT(DISTINCT q.id) AS n
+         FROM questions q JOIN question_knowledge qk ON qk.question_id = q.id
+        WHERE q.language='ja' AND q.status='active' AND q.section_key='vocab'
+          AND qk.is_primary = 1`,
+    );
+    assert.equal(primaryQuestions, vocabQuestions, '还有词汇题没主考点（应为 41/41）');
+    assert.ok(primaries.every((link) => link.weight === 1), '主考点权重应为 1');
+    assert.ok(
+      links.filter((link) => link.is_primary === 0).every((link) => link.weight === 0.4),
+      '次要关联权重应为 0.4，不能冒充主考点',
+    );
+
+    // 抽检：解析标注「計算」的题必须挂到该词节点
+    const example = db
+      .prepare(
+        `SELECT COUNT(*) AS n
+           FROM questions q JOIN question_knowledge qk ON qk.question_id = q.id
+          WHERE q.language = 'ja' AND q.stem LIKE '%計算%'
+            AND qk.knowledge_point_id = 'ja.vocab.jp-v-n4-0594'`,
+      )
+      .get() as { n: number };
+    assert.ok(example.n > 0, '解析标注的考点词未挂到对应词汇节点');
+
+    ok('日语题按词形挂接词汇节点：解析考点作主证据，全文词只作次要关联', {
+      题数: jaPool.questions,
+      已挂接: jaPool.tagged,
+      关联数: links.length,
+      主考点: primaries.length,
+    });
+  }
 
   // ---- 3. 题池：按内容去重 + 全部对上知识点 ----
   const pool = db

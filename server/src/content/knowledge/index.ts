@@ -1,7 +1,8 @@
 import type { Language } from '../../domain/language';
 import { grammarKnowledge, grammarLibrary, GRAMMAR_LANGUAGES } from '../grammar';
+import { vocabKnowledge } from './vocab';
 import { EN_TREE } from './en';
-import type { KnowledgeTree } from './types';
+import type { KnowledgeTree, KnowledgeNodeDef, KnowledgeEdgeDef } from './types';
 
 /**
  * 内置知识树登记处。
@@ -22,16 +23,25 @@ const BASE_TREES: Partial<Record<Language, KnowledgeTree>> = {
 function compose(language: Language): KnowledgeTree | null {
   const base = BASE_TREES[language] ?? null;
   const grammar = grammarKnowledge(language);
-  if (!base) {
-    return grammar ? { language, nodes: grammar.nodes, edges: grammar.edges, matchers: [] } : null;
+  const vocab = vocabKnowledge(language);
+  const declared = new Set(base?.nodes.map((node) => node.code) ?? []);
+
+  // 把派生部分并进一棵树：手写骨架优先，派生节点按编码去重，边全部保留
+  const nodes: KnowledgeNodeDef[] = [...(base?.nodes ?? [])];
+  const edges: KnowledgeEdgeDef[] = [...(base?.edges ?? [])];
+  for (const part of [grammar, vocab]) {
+    if (!part) continue;
+    for (const node of part.nodes) {
+      if (declared.has(node.code)) continue;
+      declared.add(node.code);
+      nodes.push(node);
+    }
+    edges.push(...part.edges);
   }
-  if (!grammar) return base;
-  const declared = new Set(base.nodes.map((node) => node.code));
-  return {
-    ...base,
-    nodes: [...base.nodes, ...grammar.nodes.filter((node) => !declared.has(node.code))],
-    edges: [...base.edges, ...grammar.edges],
-  };
+
+  if (!base && nodes.length === 0) return null;
+  if (!base) return { language, nodes, edges, matchers: [] };
+  return { ...base, nodes, edges };
 }
 
 const TREES = new Map<Language, KnowledgeTree>();

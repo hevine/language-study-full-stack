@@ -6,10 +6,14 @@
  * 例句均为本项目原创撰写，不复制任何词书原文。
  *
  * 每条：[词形, 假名, 词性, 中文释义, 记忆法, 例句, 例句译文, 主题]
- * 注意：这是「精选精讲」词库，不是 JLPT 全量词表；每个级别标注的是本库收录量。
+ * 注意：这里的 N3_ROWS/N2_ROWS/N1_ROWS 是早期的「精选精讲」词库（200 条，原创全字段）。
+ * 全量 10000 词在 jlptGraded.ts；pickJaWords 的取词池会把总库里带例句的精讲词也并进来，
+ * 避免每日材料只从 200 条里反复抽，同时保证不把无例句的空壳词塞进材料。
  */
 
-export type JaLevel = 'n3' | 'n2' | 'n1';
+import { JLPT_WORDS } from './jlptGraded';
+
+export type JaLevel = 'n5' | 'n4' | 'n3' | 'n2' | 'n1';
 
 export interface JaWord {
   term: string;
@@ -254,12 +258,53 @@ export const JA_WORDS: JaWord[] = [
   ...build('n1', N1_ROWS),
 ];
 
-export const JA_LEVEL_ORDER: JaLevel[] = ['n3', 'n2', 'n1'];
+/**
+ * 全量总库里带完整精讲字段（例句/记忆法）的词，转成 JaWord 供每日材料取词。
+ * 去掉与 JA_WORDS 重复的词形（一词只保留一条，原创精讲优先）。
+ * 只有核心字段的 7338 条不进这个池——它们由 lexicon.ts 的分级浏览层展示，但不做材料取词。
+ */
+const JA_DETAILED_FROM_GRADED: JaWord[] = (() => {
+  const seen = new Set(JA_WORDS.map((word) => word.term.toLowerCase()));
+  const out: JaWord[] = [];
+  for (const word of JLPT_WORDS()) {
+    if (!word.detailed) continue;
+    const key = word.term.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      term: word.term,
+      kana: word.kana,
+      pos: word.pos,
+      cn: word.cn,
+      mnemonic: word.mnemonic,
+      example: word.example,
+      exampleCn: word.exampleCn,
+      theme: word.theme,
+      level: word.level.toLowerCase() as JaLevel,
+    });
+  }
+  return out;
+})();
+
+/** 每日材料取词用的完整精讲池：原创精讲 200 + 总库精讲约 2487 */
+export const JA_PICK_POOL: JaWord[] = [...JA_WORDS, ...JA_DETAILED_FROM_GRADED];
+
+export const JA_LEVEL_ORDER: JaLevel[] = ['n5', 'n4', 'n3', 'n2', 'n1'];
 
 export const JA_LEVEL_META: Record<
   JaLevel,
   { name: string; short: string; description: string }
 > = {
+  n5: {
+    name: 'N5 入门词',
+    short: 'N5',
+    description: '问候、数字、时间、日常动作，五十音后最先接触的基础词。',
+  },
+  n4: {
+    name: 'N4 基础词',
+    short: 'N4',
+    description: '日常会话的高频动词、形容词与常用汉字词，N5 到 N3 的过渡。',
+  },
   n3: {
     name: 'N3 核心词',
     short: 'N3',
@@ -288,7 +333,7 @@ function hash(input: string): number {
 
 /** 当前级别为主、下一级别为辅（约三成），既不背得太轻松，也不至于全篇生词 */
 export function levelsForPlan(levelId: string): JaLevel[] {
-  const current = (JA_LEVEL_ORDER.includes(levelId as JaLevel) ? levelId : 'n3') as JaLevel;
+  const current = (JA_LEVEL_ORDER.includes(levelId as JaLevel) ? levelId : 'n5') as JaLevel;
   const index = JA_LEVEL_ORDER.indexOf(current);
   const next = JA_LEVEL_ORDER[index + 1];
   return next ? [current, next] : [current];
@@ -306,7 +351,7 @@ export function pickJaWords(options: {
   // 每个级别先排「没进过词汇本」的词，再排已学过的词：
   // 这样整级导入后不会因为「都被排除」而只剩下一级别的进阶词，级别配比保持稳定。
   const buckets = levels.map((level) => {
-    const pool = JA_WORDS.filter((word) => word.level === level);
+    const pool = JA_PICK_POOL.filter((word) => word.level === level);
     const bySeed = (a: JaWord, b: JaWord) => hash(seed + a.term) - hash(seed + b.term);
     const fresh = pool.filter((word) => !(exclude?.has(word.term) ?? false)).sort(bySeed);
     const seen = pool.filter((word) => exclude?.has(word.term) ?? false).sort(bySeed);

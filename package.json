@@ -24,6 +24,7 @@
     "check:knowledge": "tsx scripts/checkKnowledge.ts",
     "check:enhanced": "tsx scripts/checkToeflEnhanced.ts",
     "export:toefl-pending": "tsx scripts/exportToeflPending.ts",
+    "import:jlpt": "tsx scripts/importJlptGraded.ts",
     "check:ai": "tsx scripts/aiCheck.ts",
     "check:pool": "tsx scripts/poolCheck.ts",
     "typecheck": "tsc --noEmit",
