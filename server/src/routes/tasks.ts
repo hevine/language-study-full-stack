@@ -8,6 +8,7 @@ import { getActivePlan, getDayByDate } from '../repositories/plans';
 import { buildTaskDetail } from '../services/tasks';
 import { ensureExamTasks } from '../services/examTasks';
 import { todayISO } from '../lib/date';
+import { assertRequestLanguage } from '../lib/languageGuard';
 
 export const tasksRouter = Router();
 
@@ -17,6 +18,7 @@ tasksRouter.get(
   asyncHandler(async (req, res) => {
     const plan = getActivePlan();
     if (!plan) throw new NotFoundError('还没有备考计划，请先创建计划');
+    assertRequestLanguage(plan, req.query.language);
 
     const date = req.params.date === 'today' ? todayISO() : req.params.date;
     const raw = getDayByDate(plan.id, date);
@@ -36,6 +38,7 @@ tasksRouter.post(
   asyncHandler(async (req, res) => {
     const plan = getActivePlan();
     if (!plan) throw new NotFoundError('还没有备考计划，请先创建计划');
+    assertRequestLanguage(plan, req.query.language);
 
     const date = req.params.date === 'today' ? todayISO() : req.params.date;
     const raw = getDayByDate(plan.id, date);

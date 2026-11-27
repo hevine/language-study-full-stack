@@ -7,6 +7,7 @@ import { logStudy, removeTaskLogs } from '../repositories/misc';
 import { ensureDayContent } from '../services/content';
 import { ensureExamTasks } from '../services/examTasks';
 import { todayISO } from '../lib/date';
+import { assertRequestLanguage } from '../lib/languageGuard';
 
 export const daysRouter = Router();
 
@@ -21,6 +22,8 @@ daysRouter.get(
   asyncHandler(async (req, res) => {
     const plan = getActivePlan();
     if (!plan) throw new NotFoundError('还没有备考计划，请先创建计划');
+    // 切换语种后仍在路上的旧请求会被这里挡住，不返回错语种内容
+    assertRequestLanguage(plan, req.query.language);
 
     const date = req.params.date === 'today' ? todayISO() : req.params.date;
     const raw = getDayByDate(plan.id, date);

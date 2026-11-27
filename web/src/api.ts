@@ -100,6 +100,16 @@ export class ApiError extends Error {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** 服务端判定「请求语种 ≠ 当前激活计划语种」时的错误码，前端据此整体纠偏 */
+export const LANGUAGE_MISMATCH_CODE = 'LANGUAGE_MISMATCH';
+export const LANGUAGE_MISMATCH_EVENT = 'app:language-mismatch';
+
+/** 给 GET 请求带上当前语种：服务端据此挡住切换前发出的旧请求 */
+function withLang(path: string, language?: string): string {
+  if (!language) return path;
+  return `${path}${path.includes('?') ? '&' : '?'}language=${encodeURIComponent(language)}`;
+}
+
 /** 并发刷新合并为一次请求，避免 401 风暴把限流打满 */
 let refreshInFlight: Promise<TokenResponse | null> | null = null;
 
@@ -147,6 +157,10 @@ async function rawRequest<T>(path: string, init: RequestInit = {}, retries = 2):
         const message = payload?.error?.message ?? `请求失败（${response.status}）`;
         const code = payload?.error?.code ?? 'UNKNOWN';
         const error = new ApiError(message, response.status, code, payload?.error?.details);
+        // 语种冲突：说明界面还停在旧语种，通知全局按当前计划重新取数（不重试，避免死循环）
+        if (code === LANGUAGE_MISMATCH_CODE) {
+          window.dispatchEvent(new CustomEvent(LANGUAGE_MISMATCH_EVENT, { detail: payload?.error?.details }));
+        }
         // 4xx 不重试，5xx 最多再试 retries 次
         if (response.status >= 500 && attempt < retries) {
           lastError = error;
@@ -346,9 +360,10 @@ export const api = {
   learningPath: (language: string) =>
     request<LearningPath>(`/paths/${language}`, {}, 1),
 
-  day: (date: string) => request<DayResponse>(`/days/${date}`, {}, 1),
+  day: (date: string, language?: string) => request<DayResponse>(withLang(`/days/${date}`, language), {}, 1),
 
-  dayBrief: (date: string) => request<DayResponse>(`/days/${date}?brief=1`, {}, 1),
+  dayBrief: (date: string, language?: string) =>
+    request<DayResponse>(withLang(`/days/${date}?brief=1`, language), {}, 1),
 
   toggleTask: (date: string, taskId: string, done: boolean, minutes?: number) =>
     request<{ day: Day }>(`/days/${date}/tasks/${taskId}`, {
@@ -356,8 +371,8 @@ export const api = {
       body: JSON.stringify(minutes ? { done, minutes } : { done }),
     }),
 
-  taskDetail: (date: string, taskId: string) =>
-    request<TaskDetailResponse>(`/tasks/${date}/${taskId}`, {}, 1),
+  taskDetail: (date: string, taskId: string, language?: string) =>
+    request<TaskDetailResponse>(withLang(`/tasks/${date}/${taskId}`, language), {}, 1),
 
   resetDay: (date: string) => request<{ day: Day }>(`/days/${date}/reset`, { method: 'POST' }),
 
@@ -405,9 +420,9 @@ export const api = {
     ),
 
   /** 「换一篇」：清掉当日缓存材料，强制让大模型按当日考纲重新生成 */
-  regenerateDay: (date: string) =>
+  regenerateDay: (date: string, language?: string) =>
     request<{ source: string; notice: string | null; titles: Array<{ kind: string; title: string }> }>(
-      `/tasks/${date}/regenerate`,
+      withLang(`/tasks/${date}/regenerate`, language),
       { method: 'POST' },
       0,
     ),
@@ -697,8 +712,8 @@ export const api = {
 
   practiceOverview: () => request<PracticeOverview>('/practice/overview', {}, 1),
 
-  practice: (date: string, taskId: string) =>
-    request<PracticeBriefResponse>(`/practice/${date}/${taskId}`, {}, 1),
+  practice: (date: string, taskId: string, language?: string) =>
+    request<PracticeBriefResponse>(withLang(`/practice/${date}/${taskId}`, language), {}, 1),
 
   gradePractice: (
     date: string,
@@ -709,8 +724,9 @@ export const api = {
       submissionSource?: 'typed' | 'speech';
       recognitionConfidence?: number | null;
     },
+    language?: string,
   ) =>
-    request<GradeResponse>(`/practice/${date}/${taskId}/grade`, {
+    request<GradeResponse>(withLang(`/practice/${date}/${taskId}/grade`, language), {
       method: 'POST',
       body: JSON.stringify(body),
     }, 0),

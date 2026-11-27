@@ -87,7 +87,7 @@ export default function Dashboard() {
 
   const load = useCallback(async () => {
     try {
-      const [nextStats, nextDay] = await Promise.all([api.stats(language), api.dayBrief(todayISO())]);
+      const [nextStats, nextDay] = await Promise.all([api.stats(language), api.dayBrief(todayISO(), language)]);
       setStats(nextStats);
       setDay(nextDay.day);
     } catch (err) {

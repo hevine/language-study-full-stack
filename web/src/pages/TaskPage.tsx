@@ -11,7 +11,7 @@ import ExamCalendarCard from '../components/ExamCalendar';
 import PrepareArt from '../components/PrepareArt';
 import { Banner, kindLabel, SectionCard, StatusChip, CheckMark, TokenIcon } from '../components/ui';
 import { claimMediaPlayback } from '@waiyubaodian/ui-kit';
-import { formatCn, todayISO } from '../store';
+import { formatCn, todayISO, useApp } from '../store';
 import type { DayResponse, TaskDetailResponse, TaskKind } from '../types';
 
 const ACTION_LABEL: Record<TaskKind, string> = {
@@ -84,6 +84,8 @@ const TOKEN_ESTIMATE: Partial<Record<TaskKind, string>> = {
 export default function TaskPage() {
   const { date = todayISO(), taskId = '' } = useParams();
   const navigate = useNavigate();
+  // 带语种取数：切语种后旧请求会被服务端挡下，页面不会渲染成别语种的内容
+  const { language } = useApp();
   const [data, setData] = useState<TaskDetailResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -100,7 +102,7 @@ export default function TaskPage() {
     setError(null);
     setReadingTab('material');
     api
-      .taskDetail(date, taskId)
+      .taskDetail(date, taskId, language)
       .then((response) => {
         if (alive) setData(response);
       })
@@ -110,7 +112,7 @@ export default function TaskPage() {
     return () => {
       alive = false;
     };
-  }, [date, taskId]);
+  }, [date, taskId, language]);
 
   /** 换一篇：清掉当日缓存材料，让大模型按当日考纲重新生成，再刷新详情 */
   /** 材料准备期间：本地拉一份当日概要（只用于知道这项任务是什么类型，秒回不耗 token），并按半秒计一次已等待时长 */
@@ -119,17 +121,17 @@ export default function TaskPage() {
     const started = Date.now();
     setElapsed(0);
     const timer = setInterval(() => setElapsed((Date.now() - started) / 1000), 500);
-    api.dayBrief(date).then(setBrief).catch(() => undefined);
+    api.dayBrief(date, language).then(setBrief).catch(() => undefined);
     return () => clearInterval(timer);
-  }, [data, date, taskId]);
+  }, [data, date, taskId, language]);
 
   const regenerate = async () => {
     if (regen === 'busy') return;
     setRegen('busy');
     setError(null);
     try {
-      await api.regenerateDay(date);
-      const response = await api.taskDetail(date, taskId);
+      await api.regenerateDay(date, language);
+      const response = await api.taskDetail(date, taskId, language);
       setData(response);
     } catch (err) {
       setError((err as Error).message);

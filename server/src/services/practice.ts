@@ -8,6 +8,7 @@ import { profileOf, type Language } from '../domain/language';
 import { pickPrompt } from '../content/prompts';
 import { ValidationError } from '../lib/errors';
 import { logger } from '../lib/logger';
+import { runOnce } from '../lib/singleFlight';
 import { saveDayTasks } from '../repositories/plans';
 import { logStudy, removeTaskLogs } from '../repositories/misc';
 import {
@@ -207,6 +208,24 @@ function buildPromptFromFormat(
   };
 }
 
+/**
+ * 命题缓存命中条件：语种与评分标准都对得上才算数。
+ * 语种或题型变了，旧题目立即作废——不能让韩语计划继续展示
+ * 之前按托福/雅思生成并缓存的那道题。
+ */
+function promptMatches(
+  cached: PracticePrompt | null,
+  plan: PlanRecord,
+  format: PracticeFormat,
+): cached is PracticePrompt {
+  return Boolean(cached && cached.language === plan.language && cached.formatLabel === format.label);
+}
+
+/** 命题生成键：同一天同一任务的同一个题型只生成一次，换语种/换计划则各自生成 */
+export function promptGenerationKey(plan: PlanRecord, day: GeneratedDay, task: Task, format: PracticeFormat): string {
+  return `practice-prompt:${plan.id}:${day.date}:${task.id}:${plan.language}:${format.label}`;
+}
+
 async function ensurePrompt(
   plan: PlanRecord,
   day: GeneratedDay,
@@ -215,50 +234,56 @@ async function ensurePrompt(
   options: { allowLlm?: boolean } = {},
 ): Promise<{ prompt: PracticePrompt; generated: boolean }> {
   const cached = getPrompt(day.id, task.id);
-  // 语种或评分标准变了，旧题目立即作废：不能让韩语计划继续展示
-  // 之前按托福/雅思生成并缓存的那道题（这正是「切了语种却还是托福任务」的另一半原因）
-  if (cached && cached.language === plan.language && cached.formatLabel === format.label) {
+  if (promptMatches(cached, plan, format)) {
     return { prompt: cached, generated: false };
   }
 
-  const seed = day.weekIndex * 7 + day.dayIndex + (format.kind === 'speak' ? 3 : 0);
-  const template = pickPrompt(plan.examId, plan.language, format.kind, seed);
-  const { config } = resolveLlmConfig();
-
-  if (config && options.allowLlm !== false) {
-    try {
-      const raw = await chatJson(config, buildPromptMessages(plan, day, format), PromptSchema, {
-        temperature: 0.85,
-        maxTokens: 1400,
-        retries: 1,
-      });
-      const prompt = buildPromptFromFormat(
-        format,
-        {
-          title: raw.title,
-          scenario: raw.scenario,
-          stimulus: raw.stimulus ?? undefined,
-          question: raw.question,
-          hints: raw.hints,
-          checklist: raw.checklist,
-        },
-        'llm',
-        config.usedModel ?? config.model,
-        plan.language,
-      );
-      savePrompt({ planId: plan.id, dayId: day.id, taskId: task.id, kind: format.kind, payload: prompt });
-      return { prompt, generated: true };
-    } catch (err) {
-      logger.warn('llm prompt generation failed, fallback to bank', {
-        message: (err as Error).message,
-        day: day.date,
-      });
+  // 做题页与批改接口都会调这里；并发进入时只命题一次，避免重复消耗 token
+  return runOnce(promptGenerationKey(plan, day, task, format), async () => {
+    const again = getPrompt(day.id, task.id);
+    if (promptMatches(again, plan, format)) {
+      return { prompt: again, generated: false };
     }
-  }
 
-  const prompt = buildPromptFromFormat(format, template, 'library', null, plan.language);
-  savePrompt({ planId: plan.id, dayId: day.id, taskId: task.id, kind: format.kind, payload: prompt });
-  return { prompt, generated: true };
+    const seed = day.weekIndex * 7 + day.dayIndex + (format.kind === 'speak' ? 3 : 0);
+    const template = pickPrompt(plan.examId, plan.language, format.kind, seed);
+    const { config } = resolveLlmConfig();
+
+    if (config && options.allowLlm !== false) {
+      try {
+        const raw = await chatJson(config, buildPromptMessages(plan, day, format), PromptSchema, {
+          temperature: 0.85,
+          maxTokens: 1400,
+          retries: 1,
+        });
+        const prompt = buildPromptFromFormat(
+          format,
+          {
+            title: raw.title,
+            scenario: raw.scenario,
+            stimulus: raw.stimulus ?? undefined,
+            question: raw.question,
+            hints: raw.hints,
+            checklist: raw.checklist,
+          },
+          'llm',
+          config.usedModel ?? config.model,
+          plan.language,
+        );
+        savePrompt({ planId: plan.id, dayId: day.id, taskId: task.id, kind: format.kind, payload: prompt });
+        return { prompt, generated: true };
+      } catch (err) {
+        logger.warn('llm prompt generation failed, fallback to bank', {
+          message: (err as Error).message,
+          day: day.date,
+        });
+      }
+    }
+
+    const prompt = buildPromptFromFormat(format, template, 'library', null, plan.language);
+    savePrompt({ planId: plan.id, dayId: day.id, taskId: task.id, kind: format.kind, payload: prompt });
+    return { prompt, generated: true };
+  });
 }
 
 function practiceKindOf(task: Task): PracticeKind | null {

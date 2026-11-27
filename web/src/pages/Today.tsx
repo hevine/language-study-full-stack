@@ -10,7 +10,7 @@ import { formatCn, todayISO, useApp } from '../store';
 import type { DayResponse } from '../types';
 
 export default function Today() {
-  const { plan } = useApp();
+  const { plan, language, catalog } = useApp();
   const [data, setData] = useState<DayResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -21,14 +21,17 @@ export default function Today() {
     setLoading(true);
     setData(null);
     api
-      .day(todayISO())
-      .then((response) => alive && setData(response))
+      .day(todayISO(), language)
+      .then((response) => {
+        // 响应回来时若语种已变（切换前发出的请求），丢弃，等重挂载后的请求
+        if (alive && response.plan.language === language) setData(response);
+      })
       .catch((err: Error) => alive && setError(err.message))
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
-  }, [plan?.id]);
+  }, [plan?.id, language]);
 
   const toggle = async (taskId: string, done: boolean) => {
     if (!data) return;
@@ -99,6 +102,7 @@ export default function Today() {
           </div>
           <h1>今日主题：{day.theme}</h1>
           <div className="page-sub">
+            {catalog?.languages.find((item) => item.id === plan.language)?.nativeName ?? plan.language} ·{' '}
             {plan.examName} · {plan.targetLabel} · 今日 {totalMinutes} 分钟 · 已完成 {doneCount}/{day.tasks.length}
           </div>
         </div>
@@ -113,6 +117,14 @@ export default function Today() {
       {notice ? (
         <div style={{ marginBottom: 16 }}>
           <Banner tone={source === 'llm' ? 'teal' : 'gold'}>{notice}</Banner>
+        </div>
+      ) : null}
+
+      {/* 生成次数透明化：今天这份材料是本语种本目标第一次生成，还是直接读的缓存 */}
+      {source === 'cached' ? (
+        <div className="hint" style={{ marginBottom: 12 }}>
+          今日材料已生成过（{plan.language === 'en' ? '英语' : plan.language === 'ja' ? '日语' : '韩语'} ·{' '}
+          {plan.targetLabel}），本次直接读缓存，不会重复消耗 token。
         </div>
       ) : null}
 

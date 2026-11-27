@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { api } from './api';
+import { api, LANGUAGE_MISMATCH_EVENT } from './api';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import ExamHub from './pages/ExamHub';
@@ -152,6 +152,16 @@ export default function App() {
       cancelled = true;
     };
   }, [authReady, config?.required, userId, reload]);
+
+  // 服务端判定「请求语种 ≠ 当前计划语种」时（切换前发出的旧请求晚到），
+  // 立刻按当前计划重拉一次，页面随 planKey 重挂载后自然会用对话种取数
+  useEffect(() => {
+    const onMismatch = () => {
+      void reload().catch(() => undefined);
+    };
+    window.addEventListener(LANGUAGE_MISMATCH_EVENT, onMismatch);
+    return () => window.removeEventListener(LANGUAGE_MISMATCH_EVENT, onMismatch);
+  }, [reload]);
 
   const language = plan?.language ?? 'en';
   // 计划指纹：换语种 / 重建计划后变化，路由以此重挂载，页面的数据请求全部重跑

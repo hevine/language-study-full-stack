@@ -19,6 +19,7 @@ import {
 } from '../repositories/practice';
 import { buildPracticeBrief, gradePractice, isPracticeTask, practiceTasksForDay } from '../services/practice';
 import type { GeneratedDay, PlanRecord } from '../domain/types';
+import { assertRequestLanguage } from '../lib/languageGuard';
 
 export const practiceRouter = Router();
 
@@ -45,12 +46,15 @@ interface PracticeTarget {
  * 1. 先找当前计划——正常路径；
  * 2. 再优先找「这一天真正有批改记录」的那一天——切语种/重建计划后回看旧记录时，
  *    题目与原作答才对得上（题目缓存与批改都挂在各自的 day 上）；
- * 3. 再退到同一天的任意计划；
+ * 3. 以上都按「与当前计划同语种」优先；别的语种只作为最后的只读兜底，
+ *    否则左侧写着英语、右侧却打开一份日语旧作答，正是串台的观感来源。
  * 因此「该日期不在当前计划范围内」不再阻断查看。
  */
 function resolveTarget(date: string, taskId: string): PracticeTarget {
   const active = getActivePlan();
   let sameDateFallback: PracticeTarget | null = null;
+  /** 其它语种的记录：只有当前语种完全找不到时才用，且一定是只读 */
+  let otherLanguageFallback: PracticeTarget | null = null;
 
   if (active) {
     const day = getDayByDate(active.id, date);
@@ -67,16 +71,29 @@ function resolveTarget(date: string, taskId: string): PracticeTarget {
   if (ref) {
     const day = getDayById(ref.dayId);
     const plan = getPlan(ref.planId);
-    if (day && plan) return { plan, day, historical: true };
+    if (day && plan) {
+      // 同一语种的记录优先：否则左侧写着英语、右侧却打开一份日语旧作答
+      if (!active || plan.language === active.language) return { plan, day, historical: true };
+      otherLanguageFallback = { plan, day, historical: true };
+    }
   }
 
   const contexts = listDayContexts(date);
+  if (contexts.length > 0) {
+    const hit = contexts
+      .filter((item) => !active || item.plan.language === active.language)
+      .find((item) => item.day.tasks.some((task) => task.id === taskId));
+    if (hit) return { plan: hit.plan, day: hit.day, historical: true };
+  }
+
+  if (sameDateFallback) return sameDateFallback;
+  if (otherLanguageFallback) return otherLanguageFallback;
+
   if (contexts.length > 0) {
     const hit = contexts.find((item) => item.day.tasks.some((task) => task.id === taskId));
     if (hit) return { plan: hit.plan, day: hit.day, historical: true };
   }
 
-  if (sameDateFallback) return sameDateFallback;
   if (contexts.length > 0) {
     return { plan: contexts[0].plan, day: contexts[0].day, historical: true };
   }
@@ -133,6 +150,8 @@ practiceRouter.get(
   asyncHandler(async (req, res) => {
     const date = resolveDate(req.params.date);
     const target = resolveTarget(date, req.params.taskId);
+    // 当前计划范围内的题必须与请求语种一致；历史记录只读，允许跨语种回看
+    if (!target.historical) assertRequestLanguage(target.plan, req.query.language);
 
     const brief = await buildPracticeBrief(target.plan, target.day, req.params.taskId, {
       allowLlm: !target.historical,
@@ -159,6 +178,7 @@ practiceRouter.post(
   asyncHandler(async (req, res) => {
     const date = resolveDate(req.params.date);
     const target = resolveTarget(date, req.params.taskId);
+    if (!target.historical) assertRequestLanguage(target.plan, req.query.language);
 
     const body = parseBody(GradeInput, req.body);
     const result = await gradePractice({

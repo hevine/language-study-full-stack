@@ -178,13 +178,42 @@ server/src/agent/lang/loader.ts:26   server/src/agent/evals/harness.ts:156
 | 表 | 键 | 语种处理 |
 | --- | --- | --- |
 | `plan_days` | `plan_id + date` | 计划自带 `language`，天然隔离 |
-| `day_contents` | `day_id` | `services/content.ts:122` 守卫：缓存语种 ≠ 计划语种 → 整日内容作废重生成 |
-| `practice_prompts` | `day_id + task_id` | **表里没有 language 列**，语种在 `payload` JSON 内（`getPrompt` 解析后比对）；`services/practice.ts:220` 守卫：`payload.language` 或 `formatLabel` 不符 → 重生成 |
+| `day_contents` | `day_id`（= 计划 × 日期） | `services/content.ts:133 cachedArticles` 守卫：缓存语种 ≠ 计划语种 → 整日内容作废重生成 |
+| `practice_prompts` | `day_id + task_id` | **表里没有 language 列**，语种在 `payload` JSON 内（`getPrompt` 解析后比对）；`services/practice.ts:216 promptMatches` 守卫：`payload.language` 或 `formatLabel` 不符 → 重生成 |
 | `vocab_items` | `user_id + language + term` | 唯一键带语种，触发器挡非法值 |
 | `exam_papers` / `exam_attempts` | 按 `language` 查询 | 列表接口显式 `WHERE language = ?` |
 | `ai_bank_items` / `materials` / `listening_materials` | 按 `language` 查询 | 分语种隔离 |
 
 **副作用要知道**：历史上按英文生成的题，会在**下次打开该任务时自动作废重生成一次**。历史日期走内置库不耗 token；当日题若配了模型会消耗一次调用。
+
+### 5.1 「每天各语种各目标只生成一次」是怎么保证的
+
+生成键（`services/content.ts:125 dayContentKey`）：
+
+```
+day-content:<planId>:<date>:<language>
+```
+
+计划已经包含「语种 + 目标」，所以：
+
+| 用户动作 | 结果 |
+| --- | --- |
+| 今天第二次进入今日任务 | 命中 `day_contents`（`UNIQUE(day_id, kind)`）→ `source: 'cached'`，不调模型 |
+| 改动目标（新建同语种计划） | planId 变 → 键变 → 重新生成一份，旧目标的内容保留 |
+| 改动语种（另一个计划） | planId 与 language 都变 → 重新生成，两语种内容并存互不覆盖 |
+| 切回之前的目标/语种 | 键回到原来那个 → 直接读缓存 |
+
+**并发只生成一次**靠 `server/src/lib/singleFlight.ts:27 runOnce`：同一个键的并发调用合并成一个 Promise，后来者直接复用结果。没有它时，React StrictMode 的双 effect、用户连点、开两个标签页都会让「先查缓存 → 没有 → 调模型」两段式同时读到空缓存，于是同一天的材料被生成两遍（`INSERT OR REPLACE` 不会留重复行，所以从库里看不出异常，只能从日志的 `day content generation started` 条数发现）。写作口语命题同理，键是 `practice-prompt:<planId>:<date>:<taskId>:<language>:<formatLabel>`（`services/practice.ts:225`）。
+
+日志里搜 `generationKey` 就能确认「这天这个语种到底生成了几次」。
+
+### 5.2 请求语种与激活计划不一致 → 409
+
+前端每个取数请求都带 `?language=<当前计划语种>`；服务端 `server/src/lib/languageGuard.ts:19 assertRequestLanguage` 比对，不一致直接返回 `409 LANGUAGE_MISMATCH`（`details: { requested, active, planId }`）。
+
+拦截的是**切换语种那一刻还在路上的旧请求**：它带的是旧语种，若照常返回，页面就会拿新计划的数据渲染旧语种的界面——「左边英语、右边日语」正是这么来的。前端收到这个码会广播 `app:language-mismatch`，`App.tsx` 监听后 `reload()` 并按新的 `planKey` 重挂载，页面自然重取。
+
+覆盖的接口：`/days/:date`、`/tasks/:date/:taskId`、`/tasks/:date/regenerate`、`/practice/:date/:taskId`（及其 `/grade`）。练习的历史回看是例外：跨计划回看只在那一天当前语种完全没有记录时发生，且一律只读（不重新命题）。
 
 ---
 
@@ -193,10 +222,11 @@ server/src/agent/lang/loader.ts:26   server/src/agent/evals/harness.ts:156
 ### 6.1 自检脚本（首选）
 
 ```bash
-PATH=/usr/local/bin:$PATH npm run check:lang   # scripts/checkLanguage.ts
+PATH=/usr/local/bin:$PATH npm run check:lang   # scripts/checkLanguage.ts：内容是不是本语种
+PATH=/usr/local/bin:$PATH npm run check:day    # scripts/checkDayGeneration.ts：生成次数与隔离
 ```
 
-它遍历 `CATALOG` 里的每门语言，逐项断言（不联网、不碰真实库，自己 `mkdtemp` 隔离 `DATA_DIR`）：
+`check:lang` 遍历 `CATALOG` 里的每门语言，逐项断言（不联网、不碰真实库，自己 `mkdtemp` 隔离 `DATA_DIR`）：
 
 1. `rubricFor` 的 `label + taskType` 落在本语种，且非英语语种不得出现 `0–5 分制 / Band 0–9`；
 2. `buildPlan` 产出的今日任务标题是本语种；
@@ -205,6 +235,14 @@ PATH=/usr/local/bin:$PATH npm run check:lang   # scripts/checkLanguage.ts
 5. `buildGradePrompt` 的评分官身份是本语种，且包含 `quote / fix / rewrite 用<本语种>文`。
 
 判定方式是**字符集 + 禁词**：出现韩文/假名/「托福|雅思|TOEFL|IELTS」即判串台。
+
+`check:day` 验证的是「生成次数」（同样 `mkdtemp` 隔离，未配模型走内置库，不花 token）：
+
+1. 6 个并发请求只触发生成 1 次（`singleFlightStats().started === 1`），且只写 2 行；
+2. 同日同语种同目标第二次进入返回 `cached`，生成计数不变；
+3. 换语种 / 换目标各自生成一份，两边的文章 id 与语种互不覆盖；
+4. 把缓存行的 `language` 改成别的语种，会被识别为污染并作废重生成；
+5. `assertRequestLanguage` 对不一致语种抛 `LANGUAGE_MISMATCH`，一致或未传时放行。
 
 ### 6.2 手工三连测（改了生成链路就跑一遍）
 

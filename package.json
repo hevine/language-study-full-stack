@@ -20,6 +20,7 @@
     "admin:passwd": "tsx scripts/adminPasswd.ts",
     "check:auth": "tsx scripts/checkAuth.ts",
     "check:lang": "tsx scripts/checkLanguage.ts",
+    "check:day": "tsx scripts/checkDayGeneration.ts",
     "check:ai": "tsx scripts/aiCheck.ts",
     "check:pool": "tsx scripts/poolCheck.ts",
     "typecheck": "tsc --noEmit",

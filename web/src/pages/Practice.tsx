@@ -23,7 +23,7 @@ function countUnits(text: string, language: string): number {
 export default function Practice() {
   const { date = 'today', taskId = '' } = useParams();
   const location = useLocation();
-  const { plan } = useApp();
+  const { plan, language } = useApp();
 
   const [data, setData] = useState<PracticeBriefResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -119,7 +119,7 @@ export default function Practice() {
         durationSeconds: data.prompt.kind === 'speak' ? speaking.elapsed || null : seconds || null,
         submissionSource: data.prompt.kind === 'speak' ? 'speech' : 'typed',
         recognitionConfidence: data.prompt.kind === 'speak' ? speaking.confidence : null,
-      });
+      }, language);
       setViewing(response.attempt);
       setAttempts(response.attempts);
       window.setTimeout(

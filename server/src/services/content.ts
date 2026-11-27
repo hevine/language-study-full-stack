@@ -10,6 +10,7 @@ import { listDayContents, saveDayContent, deleteDayContents, type ArticleRecord 
 import { currentUserId } from '../auth/requestScope';
 import { upsertWords } from '../repositories/vocab';
 import { requireLanguage } from '../domain/language';
+import { runOnce } from '../lib/singleFlight';
 import { classifyLlmError, resolveLlmConfig } from './llm';
 import { generateArticle, type GenerateArticleResult } from './dayArticle';
 
@@ -114,23 +115,72 @@ export interface EnsureContentResult {
   notice: string | null;
 }
 
-export async function ensureDayContent(plan: PlanRecord, day: GeneratedDay): Promise<EnsureContentResult> {
+/**
+ * 生成键：一天一份、按「计划（含语种与目标）+ 日期 + 语种」隔离。
+ *
+ * - 同一语种同一天再次进入 → 命中 day_contents 缓存，不重复生成；
+ * - 换目标（新计划）、换语种（另一个计划）→ 键不同，各自生成一份，互不覆盖；
+ * - 并发进入同一个键 → 单飞合并成一次，后来者直接复用结果。
+ */
+export function dayContentKey(plan: PlanRecord, day: GeneratedDay): string {
+  return `day-content:${plan.id}:${day.date}:${plan.language}`;
+}
+
+/**
+ * 读缓存。语种不符的历史数据（切语种前后串库）一律作废重生成——
+ * 不能让韩语计划的精读页继续展示英语材料。
+ */
+function cachedArticles(plan: PlanRecord, day: GeneratedDay): ArticleRecord[] | null {
   const existing = listDayContents(day.id);
-  if (existing.length > 0) {
-    // 语种守卫：缓存里若是别的语种的文章（历史数据、切语种前后串库），
-    // 一律作废重生成——不能让韩语计划的精读页继续展示英语材料
-    const foreign = existing.filter((item) => item.language !== plan.language);
-    if (foreign.length === 0) {
-      return { articles: existing, source: 'cached', notice: null };
-    }
-    logger.warn('day content language mismatch, regenerating', {
-      dayId: day.id,
-      planLanguage: plan.language,
-      cachedLanguages: [...new Set(foreign.map((item) => item.language))],
-    });
-    deleteDayContents(day.id);
+  if (existing.length === 0) return null;
+
+  const foreign = existing.filter((item) => item.language !== plan.language);
+  if (foreign.length === 0) return existing;
+
+  logger.warn('day content language mismatch, regenerating', {
+    dayId: day.id,
+    planLanguage: plan.language,
+    cachedLanguages: [...new Set(foreign.map((item) => item.language))],
+  });
+  deleteDayContents(day.id);
+  return null;
+}
+
+export async function ensureDayContent(plan: PlanRecord, day: GeneratedDay): Promise<EnsureContentResult> {
+  const generationKey = dayContentKey(plan, day);
+
+  const cached = cachedArticles(plan, day);
+  if (cached) {
+    logger.debug('day content cache hit', { generationKey, articles: cached.length });
+    return { articles: cached, source: 'cached', notice: null };
   }
 
+  // 并发保护：StrictMode 的双 effect、连点、两个标签页都会同时打进来，
+  // 没有这层合并就会把同一天的材料生成两遍（token 花两份）
+  return runOnce(generationKey, async () => {
+    // 锁内二次确认：等锁期间可能已有别的请求写完库
+    const ready = cachedArticles(plan, day);
+    if (ready) return { articles: ready, source: 'cached' as const, notice: null };
+
+    logger.info('day content generation started', {
+      generationKey,
+      dayId: day.id,
+      date: day.date,
+      language: plan.language,
+    });
+
+    const result = await generateDayContent(plan, day);
+
+    logger.info('day content generation done', {
+      generationKey,
+      source: result.source,
+      articles: result.articles.length,
+    });
+    return result;
+  });
+}
+
+async function generateDayContent(plan: PlanRecord, day: GeneratedDay): Promise<EnsureContentResult> {
   const { config } = resolveLlmConfig();
   const fallback = libraryFallback(plan, day);
 
