@@ -57,6 +57,12 @@ export default function WordDeck({
 
   const current = words[index];
   const progress = words.length === 0 ? 0 : (index / words.length) * 100;
+  /** 到期复习词排在前半段：进度按「复习 x/y · 新词 m/n」显示，不让 60 个新词混成一个数字 */
+  const reviewTotal = useMemo(() => words.filter((word) => word.review).length, [words]);
+  const newTotal = words.length - reviewTotal;
+  const phaseLabel = current?.review
+    ? `复习 ${index + 1}/${reviewTotal}`
+    : `新词 ${index + 1 - reviewTotal}/${newTotal}`;
 
   const grade = async (word: TaskWord, remembered: boolean) => {
     if (word.id) {
@@ -198,13 +204,14 @@ export default function WordDeck({
           <span style={{ width: `${progress}%` }} />
         </div>
         <span className="hint">
-          {index + 1} / {words.length}
+          {phaseLabel} · {index + 1} / {words.length}
         </span>
       </div>
 
       <div className="card word-card">
         <div className="word-card-top">
-          <span className="chip chip-accent">{current.theme}</span>
+          {current.review ? <span className="chip chip-gold">复习</span> : null}
+          {current.theme ? <span className="chip chip-accent">{current.theme}</span> : null}
           {current.level ? (
             <span className="chip">{current.levelName ?? LEVEL_LABEL[current.level] ?? current.level}</span>
           ) : current.tier ? (

@@ -11,8 +11,8 @@ import {
   type KoLevel,
 } from './koLexicon';
 import {
+  hash,
   LEXICON_SOURCE,
-  pickWords,
   TOEFL_WORDS,
   type LexWord,
   type WordTier,
@@ -185,6 +185,97 @@ export function listLexEntries(
     .map(toLexEntry);
 }
 
+/**
+ * 计划级别 → 分级词表档位。
+ * 旧档位（basic/core/advanced）只有三档、精讲词 107 个，一天就要 60 个词，很快就「没词可出」；
+ * 这里改成按 1600 词表的 L1–L5 连续取，供需才撑得住每日词量。
+ */
+const LEVEL_GRADES: Record<string, ToeflGrade[]> = {
+  hs: ['L1'],
+  cet4: ['L1', 'L2'],
+  cet6: ['L2', 'L3'],
+  cet6plus: ['L3', 'L4'],
+  tem4: ['L4', 'L5'],
+};
+
+const GRADE_ORDER: ToeflGrade[] = ['L1', 'L2', 'L3', 'L4', 'L5'];
+
+/** 目标分越高越往上带一档：95 分加一档，100 分再加一档（最多到 L5） */
+function gradesForPlan(levelId: string, targetScore: number): ToeflGrade[] {
+  const grades = [...(LEVEL_GRADES[levelId] ?? ['L2', 'L3'])];
+  const extra = targetScore >= 100 ? 2 : targetScore >= 95 ? 1 : 0;
+  for (let i = 0; i < extra; i += 1) {
+    const last = grades[grades.length - 1];
+    const next = GRADE_ORDER[GRADE_ORDER.indexOf(last) + 1];
+    if (next && !grades.includes(next)) grades.push(next);
+  }
+  return grades;
+}
+
+/** 分级词表的词 → 词卡字段；精讲词库里有同一词时优先用更完整的释义与例句 */
+function gradedToEntry(word: import('./toeflGraded').GradedWord): LexEntry {
+  const enhanced = enhancedOf(word.code);
+  const rich = TOEFL_WORDS.find((item) => item.term.toLowerCase() === word.term.toLowerCase());
+  const base = rich ? toLexEntry(rich) : null;
+  return {
+    term: word.term,
+    reading: word.ipa,
+    pos: word.pos,
+    cn: base?.cn ?? enhanced?.cn ?? '',
+    mnemonic: base?.mnemonic ?? enhanced?.mnemonic ?? '',
+    example: base?.example ?? enhanced?.example ?? '',
+    exampleCn: base?.exampleCn ?? enhanced?.exampleCn ?? '',
+    syn: base?.syn ?? [],
+    theme: word.theme,
+    level: word.level,
+    code: word.code,
+    forms: word.forms,
+    relations: word.relations,
+    band: word.band,
+    pending: !(base || enhanced?.cn),
+  };
+}
+
+/**
+ * 英语取词：从 1600 词分级表里按档位轮转取未被学过的词。
+ * 只出「有中文释义」的词（还剩 95 个待补，出了也是空卡）；
+ * 没有可出的词时宁可少给，也不拿已学过的词假装新词。
+ */
+function pickEnEntries(options: {
+  levelId: string;
+  targetScore: number;
+  seed: string;
+  count: number;
+  exclude?: Set<string>;
+}): LexEntry[] {
+  const { levelId, targetScore, seed, count, exclude } = options;
+  const grades = gradesForPlan(levelId, targetScore);
+  const buckets = new Map<ToeflGrade, Array<import('./toeflGraded').GradedWord>>();
+  for (const grade of grades) {
+    const pool = listGradedWords({ level: grade })
+      .filter((word) => !(exclude?.has(word.term) ?? false))
+      .filter((word) => Boolean(enhancedOf(word.code)?.cn))
+      .sort((a, b) => hash(seed + a.term) - hash(seed + b.term));
+    buckets.set(grade, pool);
+  }
+
+  const picked: Array<import('./toeflGraded').GradedWord> = [];
+  let round = 0;
+  while (picked.length < count && round < 400) {
+    let added = false;
+    for (const grade of grades) {
+      const next = buckets.get(grade)?.[round];
+      if (!next) continue;
+      picked.push(next);
+      added = true;
+      if (picked.length >= count) break;
+    }
+    if (!added) break;
+    round += 1;
+  }
+  return picked.map(gradedToEntry);
+}
+
 /** 取词：英语看「当前水平 + 目标分」，日语/韩语看「当前级别 + 下一级别」 */
 export function pickLexEntries(options: {
   language: LexLanguage;
@@ -223,7 +314,7 @@ export function pickLexEntries(options: {
       level: word.level,
     }));
   }
-  return pickWords({ levelId, targetScore, seed, count, exclude }).map(toLexEntry);
+  return pickEnEntries({ levelId, targetScore, seed, count, exclude });
 }
 
 /** 日语/韩语词库的「下一篇」提示：低级别计划里出现高级别词时，界面上要说清楚 */

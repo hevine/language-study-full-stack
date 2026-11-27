@@ -3,6 +3,7 @@ import { findExam, findLevel, getLanguage } from '../catalog';
 import type { ExamDef, Language, LevelDef, PhaseDef, ScoreTarget, TaskKind } from '../catalog/types';
 import { addDays, diffDays } from '../lib/date';
 import { ValidationError } from '../lib/errors';
+import { sessionNewWordCount } from '../domain/vocabPlan';
 import type {
   Feasibility,
   FeasibilityLevel,
@@ -220,11 +221,13 @@ function taskCopy(
   ctx: { theme: string; newWords: number; examName: string; isReviewDay: boolean; minutes: number },
 ): Copy {
   const { theme, newWords, examName, minutes } = ctx;
+  // 标题里的数字必须是今天词卡里真实的新词数：与 tasks.ts 出词用同一个换算函数
+  const vocabCount = sessionNewWordCount(newWords, minutes);
   if (language === 'ko') {
     switch (kind) {
       case 'vocab':
         return {
-          title: `새 단어 ${newWords}개＋복습`,
+          title: `새 단어 ${vocabCount}개＋복습`,
           detail: '先认读韩文字形（3 秒内反应出中文），再做罗马字读音自测；错词进明天队列。',
         };
       case 'grammar':
@@ -258,7 +261,7 @@ function taskCopy(
     switch (kind) {
       case 'vocab':
         return {
-          title: `単語 ${newWords} 個＋復習`,
+          title: `単語 ${vocabCount} 個＋復習`,
           detail: '先看汉字读音，再遮住中文回想释义；错词放进明天的复习队列。',
         };
       case 'grammar':
@@ -292,7 +295,7 @@ function taskCopy(
   switch (kind) {
     case 'vocab':
       return {
-        title: `新词 ${newWords} 个 + 复习到期词`,
+        title: `新词 ${vocabCount} 个 + 复习到期词`,
         detail: '先认读（3 秒内反应出中文），再做拼写自测；不熟的词进明天队列。',
       };
     case 'read':

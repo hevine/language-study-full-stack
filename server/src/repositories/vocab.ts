@@ -159,6 +159,16 @@ export function upsertWords(
   return added;
 }
 
+/**
+ * 「该复习了」的统一口径：
+ *   · 学过（reps > 0）的词 → 按记忆曲线的 due_date 到期；
+ *   · 还没点过记住/回看的词 → 入库次日才算到期。
+ * 新词入库当天 due_date 就是当天，若直接按「due_date <= 今天」算，
+ * 今天刚发的 60 个新词会立刻变成「今日待复习 121 个」——数字和词卡对不上，
+ * 也会让用户误以为词汇本里积压了大量没见过的词。
+ */
+const DUE_WHERE = '((reps > 0 AND due_date <= ?) OR (reps = 0 AND due_date < ?))';
+
 export function listDue(
   userId: string,
   language: Language,
@@ -169,9 +179,10 @@ export function listDue(
   return (
     db
       .prepare(
-        'SELECT * FROM vocab_items WHERE user_id = ? AND language = ? AND due_date <= ? ORDER BY due_date ASC, created_at ASC LIMIT ?',
+        `SELECT * FROM vocab_items WHERE user_id = ? AND language = ? AND ${DUE_WHERE}
+         ORDER BY due_date ASC, created_at ASC LIMIT ?`,
       )
-      .all(userId, language, today, limit) as VocabRow[]
+      .all(userId, language, today, today, limit) as VocabRow[]
   ).map(map);
 }
 
@@ -240,9 +251,9 @@ export function vocabStats(
     .get(userId, language) as { n: number };
   const due = db
     .prepare(
-      'SELECT COUNT(*) AS n FROM vocab_items WHERE user_id = ? AND language = ? AND due_date <= ?',
+      `SELECT COUNT(*) AS n FROM vocab_items WHERE user_id = ? AND language = ? AND ${DUE_WHERE}`,
     )
-    .get(userId, language, today) as { n: number };
+    .get(userId, language, today, today) as { n: number };
   const mastered = db
     .prepare(
       'SELECT COUNT(*) AS n FROM vocab_items WHERE user_id = ? AND language = ? AND interval_days >= 21',
@@ -265,13 +276,13 @@ export function vocabLevelStats(userId: string, language: Language): LevelStat[]
     .prepare(
       `SELECT level,
               COUNT(*) AS total,
-              SUM(CASE WHEN due_date <= ? THEN 1 ELSE 0 END) AS due,
+              SUM(CASE WHEN ${DUE_WHERE} THEN 1 ELSE 0 END) AS due,
               SUM(CASE WHEN interval_days >= 21 THEN 1 ELSE 0 END) AS mastered
        FROM vocab_items
        WHERE user_id = ? AND language = ?
        GROUP BY level`,
     )
-    .all(today, userId, language) as Array<{
+    .all(today, today, userId, language) as Array<{
     level: string | null;
     total: number;
     due: number;

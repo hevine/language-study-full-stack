@@ -8,8 +8,10 @@ import {
   type LexEntry,
   type LexLanguage,
 } from '../content/lexicon';
-import { findByTerms, listWords, upsertWords } from '../repositories/vocab';
+import { findByTerms, listDue, listWords, upsertWords, type VocabRecord } from '../repositories/vocab';
 import { currentUserId } from '../auth/requestScope';
+import { todayISO } from '../lib/date';
+import { sessionNewWordCount, sessionReviewCount } from '../domain/vocabPlan';
 import { buildAdminDetail, type AdminPayload } from './examTasks';
 import {
   buildMaterialArticle,
@@ -39,6 +41,8 @@ export interface TaskWord {
   levelName: string | null;
   /** 日语计划里出现的下一级别词（进阶词），界面上会单独标注 */
   stretch: boolean;
+  /** true = 到期复习词（词汇本里已学过、今天该回炉），不在「今日新词」里计数 */
+  review: boolean;
 }
 
 export type TaskDetail =
@@ -46,6 +50,16 @@ export type TaskDetail =
       kind: 'vocab';
       payload: {
         words: TaskWord[];
+        /** 本次新学词量（与任务标题里的数字一致） */
+        newCount: number;
+        /** 计划承诺的每日新词量（newCount 不足时用来说明差距） */
+        newTarget: number;
+        /** 词库见底时的说明；正常情况为空串 */
+        shortNote: string;
+        /** 本次安排的到期复习词量 */
+        reviewCount: number;
+        /** 词汇本里到期复习词的总数（可能大于本次安排量） */
+        dueCount: number;
         source: string;
         levelName: string;
         targetLabel: string;
@@ -122,9 +136,8 @@ const TIER_NOTE: Record<string, string> = {
   tem4: '接近目标分，重点补冲 100 的拉分词与学术论证词。',
 };
 
-function wordCountForTask(minutes: number): number {
-  return Math.max(8, Math.min(16, Math.round(minutes / 3)));
-}
+/** 旧的三档精讲级别；1600 词表用 L1–L5，不再塞进 tier 字段 */
+const LEGACY_TIERS = new Set(['basic', 'core', 'advanced']);
 
 function toTaskWord(
   entry: LexEntry,
@@ -144,23 +157,72 @@ function toTaskWord(
     exampleCn: entry.exampleCn,
     syn: entry.syn,
     theme: entry.theme,
-    tier: language === 'en' ? (entry.level as TaskWord['tier']) : null,
+    tier: language === 'en' && LEGACY_TIERS.has(entry.level)
+      ? (entry.level as TaskWord['tier'])
+      : null,
     level: entry.level,
     levelName: lexLevelName(language, entry.level),
     stretch: isStretchWord(language, planLevelId, entry.level),
+    review: false,
+  };
+}
+
+/** 词汇本记录（含 SRS 进度）→ 词卡；到期复习词走这条路径 */
+function reviewToTaskWord(
+  record: VocabRecord,
+  language: LexLanguage,
+  planLevelId: string,
+): TaskWord {
+  return {
+    id: record.id,
+    term: record.term,
+    ipa: language === 'en' ? record.reading : null,
+    reading: language === 'en' ? null : record.reading,
+    pos: record.pos,
+    cn: record.meaning,
+    mnemonic: record.mnemonic ?? '',
+    example: record.example,
+    exampleCn: record.exampleCn,
+    syn: record.syn,
+    theme: record.theme ?? '',
+    tier: language === 'en' ? ((record.level as TaskWord['tier']) ?? null) : null,
+    level: record.level,
+    levelName: record.level ? lexLevelName(language, record.level) : null,
+    stretch: record.level ? isStretchWord(language, planLevelId, record.level) : false,
+    review: true,
   };
 }
 
 /**
- * 词汇任务：按「当前级别 + 目标」从对应语种的分级词库里取词。
- * 英语取托福词库（basic/core/advanced），日语取 JLPT 词库（n3/n2/n1），
- * 两者共用同一套写库逻辑，但 language 不同、词表不同，互不污染。
+ * 词汇任务：先排到期的复习词，再按「当前级别 + 目标」出今天的新词。
+ * 英语走 1600 词分级表（L1–L5，见 content/lexicon.ts 的 pickEnEntries），
+ * 日语/韩语走 JLPT / TOPIK 词库；两者共用同一套写库逻辑，language 不同、词表不同，互不污染。
  */
 function buildVocab(plan: PlanRecord, day: GeneratedDay, task: Task): TaskDetail {
   const language: LexLanguage = plan.language;
-  const count = wordCountForTask(task.minutes);
+  const userId = currentUserId();
+  // 词量以计划承诺的「每日新词」为准，并受本次任务时长约束；标题由同一个函数算出，两边不会对不上
+  const count = sessionNewWordCount(plan.roadmap?.newWordsPerDay, task.minutes);
+
+  /**
+   * 到期复习词：词汇本里今天该回炉的词，排在新词前面先过一遍。
+   * 口径见 repositories/vocab.ts 的 DUE_WHERE：学过按记忆曲线到期，
+   * 没点过的词入库次日才算到期（今天刚发的词不会立刻变成「复习」）。
+   */
+  const today = todayISO();
+  const dueAll = listDue(userId, language, { limit: 200 });
+  const reviewCount = sessionReviewCount(dueAll.length, count);
+  const reviewRecords = dueAll.slice(0, reviewCount);
+
+  /**
+   * 「已经学过」才排除：今天刚入库、还没点过记住/回看的词不算。
+   * 否则同一天反复打开词汇任务，每次都会换一批新词入库，词汇本越刷越多、明天全是「到期」。
+   * 注意 dueDate 会用「学过一次」的日期往后推，所以今天新入库的词 dueDate === today。
+   */
   const known = new Set(
-    listWords(currentUserId(), language, { limit: 500 }).map((word) => word.term),
+    listWords(userId, language, { limit: 500 })
+      .filter((word) => word.reps > 0 || word.dueDate !== today)
+      .map((word) => word.term),
   );
   // 启用「我的教材」时优先背教材里这一章出现的词，不足再用考纲词补齐
   const materialCtx = materialContextFor(plan, day);
@@ -175,6 +237,7 @@ function buildVocab(plan: PlanRecord, day: GeneratedDay, task: Task): TaskDetail
     count: packQuota,
   });
   const remaining = Math.max(0, count - fromMaterial.length - packs.entries.length);
+  // 兜底词库可能把「已经学过」的词补回来，这里再兜一层：新词只留没进过词汇本的
   const picked = [
     ...fromMaterial,
     ...packs.entries,
@@ -189,7 +252,8 @@ function buildVocab(plan: PlanRecord, day: GeneratedDay, task: Task): TaskDetail
         ...packs.entries.map((entry) => entry.term),
       ]),
     }),
-  ];
+  ].filter((entry, index, list) => !known.has(entry.term)
+    && list.findIndex((item) => item.term === entry.term) === index);
 
   upsertWords(
     currentUserId(),
@@ -214,7 +278,7 @@ function buildVocab(plan: PlanRecord, day: GeneratedDay, task: Task): TaskDetail
   );
 
   const records = findByTerms(
-    currentUserId(),
+    userId,
     language,
     picked.map((entry) => entry.term),
   );
@@ -224,12 +288,30 @@ function buildVocab(plan: PlanRecord, day: GeneratedDay, task: Task): TaskDetail
   const fromPack = packs.entries.length > 0 ? `词表《${packs.packs.join('、')}》` : '';
   const sourceLabel = [fromBook, fromPack].filter(Boolean).join(' + ');
 
+  // 复习词排前面：先回炉到期的旧词，再学今天的新词
+  const reviewWords = reviewRecords.map((record) =>
+    reviewToTaskWord(record, language, plan.currentLevelId),
+  );
+  const newWords = picked.map((entry) =>
+    toTaskWord(entry, idByTerm.get(entry.term) ?? null, language, plan.currentLevelId),
+  );
+  const words = [...reviewWords, ...newWords];
+  // 词库/教材见底时如实说明，别拿学过的词充数
+  const shortNote =
+    newWords.length < count
+      ? `按当前级别能提供的未学新词只剩 ${newWords.length} 个（计划目标 ${count} 个/天）。`
+        + '到「设置 → 我的教材」导入教材或词表可以继续扩充词库。'
+      : '';
+
   return {
     kind: 'vocab',
     payload: {
-      words: picked.map((entry) =>
-        toTaskWord(entry, idByTerm.get(entry.term) ?? null, language, plan.currentLevelId),
-      ),
+      words,
+      newCount: newWords.length,
+      newTarget: count,
+      shortNote,
+      reviewCount: reviewWords.length,
+      dueCount: dueAll.length,
       source: sourceLabel
         ? `${sourceLabel} · 教材/资料词 ${fromMaterial.length + packs.entries.length} 个，考纲词补 ${remaining} 个`
         : LEX_SOURCE[language],

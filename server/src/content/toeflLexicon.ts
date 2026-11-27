@@ -783,81 +783,17 @@ export const TOEFL_WORDS: LexWord[] = [
   },
 ];
 
-const LEVEL_TIERS: Record<string, WordTier[]> = {
-  hs: ['basic'],
-  cet4: ['basic', 'core'],
-  cet6: ['core'],
-  cet6plus: ['core', 'advanced'],
-  tem4: ['advanced', 'core'],
-};
-
-function hash(text: string): number {
+/**
+ * 稳定打散用的 FNV-1a：同一天同一 seed 永远得到同一批词。
+ * 现在英语取词走 1600 词分级表（见 content/lexicon.ts），这里保留 hash 供其复用。
+ */
+export function hash(text: string): number {
   let h = 2166136261;
   for (let i = 0; i < text.length; i += 1) {
     h ^= text.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
   return h >>> 0;
-}
-
-/**
- * 按当前水平 + 目标分选词：同一天永远给同一批词（seed 用日期），
- * 不同天换一批；已进过词汇本的词优先排除。
- */
-export function pickWords(options: {
-  levelId: string;
-  targetScore: number;
-  seed: string;
-  count: number;
-  exclude?: Set<string>;
-}): LexWord[] {
-  const { levelId, targetScore, seed, count, exclude } = options;
-  const tiers = [...(LEVEL_TIERS[levelId] ?? ['core'])];
-  // 目标 95 分以上，即使基础一般也要开始见"拉分词"
-  if (targetScore >= 95 && !tiers.includes('advanced')) tiers.push('advanced');
-  if (targetScore >= 100 && !tiers.includes('core')) tiers.push('core');
-
-  const buckets = new Map<WordTier, LexWord[]>();
-  const used = new Set<string>();
-  for (const tier of tiers) {
-    const pool = TOEFL_WORDS.filter(
-      (word) => word.tier === tier && !(exclude?.has(word.term) ?? false),
-    ).sort((a, b) => hash(seed + a.term) - hash(seed + b.term));
-    buckets.set(tier, pool);
-  }
-
-  // 按 tier 优先级轮流取，保证"基础词 + 高频核心词"混着来，不会一天全是难词
-  const picked: LexWord[] = [];
-  let round = 0;
-  while (picked.length < count && round < 200) {
-    let added = false;
-    for (const tier of tiers) {
-      const bucket = buckets.get(tier);
-      if (!bucket) continue;
-      const next = bucket[round];
-      if (next && !used.has(next.term)) {
-        used.add(next.term);
-        picked.push(next);
-        added = true;
-        if (picked.length >= count) break;
-      }
-    }
-    if (!added) break;
-    round += 1;
-  }
-
-  // 词库不够时，允许从被排除的词里补（保证页面上至少有内容）
-  if (picked.length < count && exclude) {
-    const extras = TOEFL_WORDS.filter(
-      (word) => tiers.includes(word.tier) && exclude.has(word.term),
-    ).sort((a, b) => hash(seed + a.term) - hash(seed + b.term));
-    for (const word of extras) {
-      if (picked.length >= count) break;
-      if (!picked.some((item) => item.term === word.term)) picked.push(word);
-    }
-  }
-
-  return picked.slice(0, count);
 }
 
 export const LEXICON_SOURCE =

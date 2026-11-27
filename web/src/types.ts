@@ -766,6 +766,8 @@ export interface TaskWord {
   levelName: string | null;
   /** 当前计划级别之外的进阶词（日语 N3 计划里混入的 N2 词） */
   stretch: boolean;
+  /** true = 到期复习词（词汇本里已学过、今天回炉），不在「今日新词」里计数 */
+  review?: boolean;
 }
 
 export type TaskDetail =
@@ -773,6 +775,16 @@ export type TaskDetail =
       kind: 'vocab';
       payload: {
         words: TaskWord[];
+        /** 本次新学词量（与任务标题里的数字一致） */
+        newCount?: number;
+        /** 计划承诺的每日新词量 */
+        newTarget?: number;
+        /** 词库见底时的说明；正常为空 */
+        shortNote?: string;
+        /** 本次安排的到期复习词量 */
+        reviewCount?: number;
+        /** 词汇本里到期复习词的总数（可能大于本次安排量） */
+        dueCount?: number;
         source: string;
         levelName: string;
         targetLabel: string;

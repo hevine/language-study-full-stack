@@ -24,7 +24,7 @@
     "check:ai": "tsx scripts/aiCheck.ts",
     "check:pool": "tsx scripts/poolCheck.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test server/src/services/explainSubtitle.test.ts",
+    "test": "node --import tsx --test server/src/services/explainSubtitle.test.ts server/src/domain/vocabPlan.test.ts",
     "clean:cache": "rm -f vite.config.ts.timestamp-*.mjs && rm -rf node_modules/.vite",
     "import:material": "tsx scripts/importMaterials.ts",
     "import:exam": "tsx scripts/importExam.ts",

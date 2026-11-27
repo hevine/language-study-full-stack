@@ -81,6 +81,57 @@ const TOKEN_ESTIMATE: Partial<Record<TaskKind, string>> = {
   mock: '约 2.2k',
 };
 
+type VocabPayload = Extract<TaskDetailResponse['detail'], { kind: 'vocab' }>['payload'];
+
+/**
+ * 词汇任务的说明卡：把「复习到期词 / 新词」拆开写清楚。
+ * 过去只写一个总数，用户看到标题承诺 60 个、进来只有 15 个，也不知道哪些旧词到期。
+ */
+function VocabIntro({ payload }: { payload: VocabPayload }) {
+  const reviewWords = payload.words.filter((word) => word.review);
+  const newWords = payload.words.filter((word) => !word.review);
+  const reviewCount = payload.reviewCount ?? reviewWords.length;
+  const newCount = payload.newCount ?? newWords.length;
+  const dueCount = payload.dueCount ?? reviewCount;
+
+  return (
+    <SectionCard
+      title={`今天这批词 · ${payload.words.length} 个`}
+      extra={<span className="hint">先复习到期词，再学新词</span>}
+    >
+      <div className="row" style={{ marginBottom: 10, flexWrap: 'wrap', gap: 6 }}>
+        {reviewCount > 0 ? <span className="chip chip-gold">复习到期 {reviewCount}</span> : null}
+        <span className="chip chip-teal">新词 {newCount}</span>
+        <span className="chip">{payload.levelName}</span>
+        <span className="hint">目标 {payload.targetLabel}</span>
+      </div>
+      {reviewCount > 0 ? (
+        <div className="hint" style={{ marginBottom: 8 }}>
+          今天先回炉这些旧词：{reviewWords.map((word) => word.term).join('、')}
+          {dueCount > reviewCount
+            ? `。词汇本里还有 ${dueCount - reviewCount} 个到期词，之后每天会继续往前排。`
+            : '。'}
+        </div>
+      ) : (
+        <div className="hint" style={{ marginBottom: 8 }}>
+          词汇本里今天没有到期词，先把新词过完；学过的新词明天开始按记忆曲线回到这里的复习队列。
+        </div>
+      )}
+      {payload.shortNote ? (
+        <div style={{ marginBottom: 8 }}>
+          <Banner tone="gold">{payload.shortNote}</Banner>
+        </div>
+      ) : null}
+      <div className="small" style={{ color: 'var(--ink-soft)' }}>
+        {payload.tierNote}
+      </div>
+      <div className="hint" style={{ marginTop: 6 }}>
+        {payload.source}
+      </div>
+    </SectionCard>
+  );
+}
+
 export default function TaskPage() {
   const { date = todayISO(), taskId = '' } = useParams();
   const navigate = useNavigate();
@@ -283,22 +334,7 @@ export default function TaskPage() {
 
       {detail.kind === 'vocab' ? (
         <div className="stack">
-          <SectionCard
-            title={`今天这批词 · ${detail.payload.words.length} 个`}
-            extra={<span className="hint">按当前水平与目标分挑选</span>}
-          >
-            <div className="row" style={{ marginBottom: 10 }}>
-              <span className="chip">{detail.payload.levelName}</span>
-              <span className="chip chip-teal">目标 {detail.payload.targetLabel}</span>
-            </div>
-            <div className="small" style={{ color: 'var(--ink-soft)' }}>
-              {detail.payload.tierNote}
-            </div>
-            <div className="hint" style={{ marginTop: 6 }}>
-              {detail.payload.source}
-            </div>
-          </SectionCard>
-
+          <VocabIntro payload={detail.payload} />
           <WordDeck words={detail.payload.words} onFinish={complete} />
         </div>
       ) : null}

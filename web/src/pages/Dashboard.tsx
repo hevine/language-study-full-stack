@@ -228,7 +228,21 @@ export default function Dashboard() {
                       </div>
                       <div className="task-detail">{task.detail}</div>
                     </div>
-                    <div className="task-mins">{task.minutes}′</div>
+                    <div className="task-side">
+                      <span className="task-mins">{task.minutes}′</span>
+                      {/* 概览里也能直接进这项任务，不用先跳到「今日任务」再找一遍 */}
+                      <Link
+                        to={`/task/${day.date}/${task.id}`}
+                        className="task-go"
+                        aria-label={`进入任务：${task.title}`}
+                        title={task.done ? '再做一遍' : '进入这项任务'}
+                      >
+                        {task.done ? '再做' : '进入'}
+                        <span className="task-go-arrow" aria-hidden>
+                          →
+                        </span>
+                      </Link>
+                    </div>
                   </div>
                 ))}
               </div>
