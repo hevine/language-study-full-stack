@@ -7,6 +7,7 @@
  */
 import type { Language } from '../domain/language';
 import type { GeneratedDay, PlanRecord } from '../domain/types';
+import { getGrammarLibrary, grammarLevelsForPlan, type GrammarPointView } from '../repositories/grammar';
 import { listMaterials, listUnits, type MaterialRecord, type MaterialUnitRecord } from '../repositories/materials';
 import { planLevelWindow } from './curriculum';
 
@@ -224,9 +225,13 @@ export interface GrammarPick {
  * 今天轮到哪几个句型。
  * 同一天重复生成拿到同一批（不然「再生成一批」会跳到完全无关的句型），
  * 换一天自动往后挪，一本书用完再从头开始。
+ *
+ * 没有上传语法书时退到内置语法库：取落在计划级别窗口内的语法点，按同样的方式轮换。
+ * 用户自己上传的书永远优先。
  */
 export function grammarPatternsFor(plan: PlanRecord, day: GeneratedDay, count = 3): GrammarPick | null {
   const books = grammarBooksFor(plan);
+  if (books.length === 0) return builtinGrammarFor(plan, day, count);
   if (books.length === 0) return null;
 
   const picked: GrammarPattern[] = [];
@@ -250,6 +255,44 @@ export function grammarPatternsFor(plan: PlanRecord, day: GeneratedDay, count = 
   }
 
   return picked.length > 0 ? { materialTitle, patterns: picked.slice(0, count) } : null;
+}
+
+/**
+ * 内置语法库兜底：计划级别窗口内的语法点，按天等距跨步取。
+ * 库里一个点都没有（图谱还没写入）时返回 null，出题退回「模型自己挑」。
+ */
+function builtinGrammarFor(plan: PlanRecord, day: GeneratedDay, count: number): GrammarPick | null {
+  const language = plan.language as Language;
+  const levelIds = grammarLevelsForPlan(language, planLevelWindow(plan).levels);
+  if (levelIds.length === 0) return null;
+
+  const library = getGrammarLibrary(language);
+  const pool = library.points.filter((point) => levelIds.includes(point.level));
+  if (pool.length === 0) return null;
+
+  const labels = library.levels
+    .filter((level) => levelIds.includes(level.id))
+    .map((level) => level.label)
+    .join(' / ');
+  const dayIndex = day.weekIndex * 7 + day.dayIndex;
+  const stride = Math.max(1, Math.floor(pool.length / count));
+  const patterns: GrammarPattern[] = [];
+  for (let i = 0; i < count && i < pool.length; i += 1) {
+    patterns.push(builtinToPattern(pool[(dayIndex * count + i * stride) % pool.length]));
+  }
+  return { materialTitle: `内置语法库 · ${labels}`, patterns };
+}
+
+function builtinToPattern(point: GrammarPointView): GrammarPattern {
+  return {
+    pattern: point.name,
+    keigu: point.structure,
+    gist: point.meaning,
+    similar: point.synonym ? [point.synonym] : [],
+    example: point.example,
+    translation: point.translation,
+    raw: [point.note, point.errorRule ? `易错：${point.errorRule.name}` : ''].filter(Boolean).join('\n'),
+  };
 }
 
 /** 单元正文是按固定小标题存的，这里还原成结构；万一格式对不上，退回整段 */

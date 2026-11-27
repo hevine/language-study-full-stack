@@ -157,7 +157,7 @@ export default function Setup() {
           </div>
         </div>
         {plan ? (
-          <button className="btn btn-sm" onClick={() => navigate('/')}>
+          <button className="btn btn-sm" onClick={() => navigate('/dashboard')}>
             返回当前计划
           </button>
         ) : null}

@@ -26,6 +26,12 @@ export interface AgentRequest {
   scene?: string;
   /** 阅读类场景的输入实体：讲解视频按文章生成，不是一个 articleId 就够不成活 */
   articleId?: string;
+  /** 口语场景的录音：录音仓里的 audioId，转写交给 speak.asr（内核不碰字节） */
+  audioRef?: string;
+  /** 录音元信息，只进 trace 与界面说明，不参与推理 */
+  audio?: { name?: string; durationMs?: number; source?: string };
+  /** 文本是从哪来的：手打 / 录音转写 / 转写后改过 —— 决定 speak.asr 要不要重新转写 */
+  transcriptSource?: 'typed' | 'asr' | 'asr-edited';
   helpLevel?: HelpLevel;
   signal?: AbortSignal;
 }
@@ -50,7 +56,11 @@ function newRunId(): string {
   return `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 }
 
-export async function* runAgent(req: AgentRequest, runtime: AgentRuntime): AsyncGenerator<AgentEvent> {
+export async function* runAgent(
+  req: AgentRequest,
+  runtime: AgentRuntime,
+  options?: { initialBag?: Bag },
+): AsyncGenerator<AgentEvent> {
   const { deps, registry, scenes, langs } = runtime;
   const runId = newRunId();
 
@@ -109,7 +119,7 @@ export async function* runAgent(req: AgentRequest, runtime: AgentRuntime): Async
     needsPreview: planned.needsPreview,
   };
 
-  const bag: Bag = {};
+  const bag: Bag = options?.initialBag ? { ...options.initialBag } : {};
   const runSteps: RunStep[] = [];
   const artifacts: Artifact[] = [];
   let usedTokens = 0;
@@ -161,7 +171,17 @@ export async function* runAgent(req: AgentRequest, runtime: AgentRuntime): Async
       step,
       tool,
       ctx,
-      args: { text: req.text ?? req.query ?? '', exam: req.exam, articleId: req.articleId },
+      args: {
+        text: req.text ?? req.query ?? '',
+        exam: req.exam,
+        articleId: req.articleId,
+        // 口语场景要口语的评分标准：不传 kind 就会拿写作 rubric 去评口语（雅思「任务完成度」评口语毫无意义）
+        kind: scene.category === 'speaking' ? 'speak' : 'write',
+        // 口语工具靠这两项决定「用稿还是转写」：有稿就不该再花一次识别
+        audioRef: req.audioRef,
+        transcriptSource: req.transcriptSource,
+        audioDurationMs: req.audio?.durationMs,
+      },
     });
 
     record.ms = result.ms;
@@ -208,6 +228,10 @@ export async function* runAgent(req: AgentRequest, runtime: AgentRuntime): Async
       exam: req.exam,
       query: req.query,
       articleId: req.articleId,
+      // 录音只留 id 与时长：trace 会被别人点开回放，不该塞一份音频进去
+      audio: req.audioRef
+        ? { audioRef: req.audioRef, ...(req.audio ?? {}), transcriptSource: req.transcriptSource ?? null }
+        : undefined,
     },
     contextDigest: digest,
     steps: runSteps,

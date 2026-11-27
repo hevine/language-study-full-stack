@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { db, parseJson } from '../db';
 import { SEED_PAPERS } from '../data/exams';
 import { logger } from '../lib/logger';
+import { purgePaperAttemptRecords, recordExamAttempt } from './knowledge';
 
 
 export type PaperType = 'real' | 'mock' | 'ai';
@@ -417,6 +418,8 @@ export function saveAttempt(
     seconds: number;
   },
 ): void {
+  const userId = currentUserId();
+  const submittedAt = new Date().toISOString();
   db.prepare(
     `UPDATE exam_attempts
         SET answers = ?, writing = ?, correct = ?, total = ?, seconds = ?, submitted_at = ?, status = 'done'
@@ -427,10 +430,35 @@ export function saveAttempt(
     input.correct,
     input.total,
     input.seconds,
-    new Date().toISOString(),
+    submittedAt,
     id,
-    currentUserId(),
+    userId,
   );
+
+  // 逐题落库是诊断的数据前提。刻意不与上面同事务：诊断是附加能力，
+  // 它出任何问题都不能让用户交不了卷；万一这里失败，下次启动的回填会幂等补上。
+  try {
+    const attempt = db
+      .prepare('SELECT paper_id, language FROM exam_attempts WHERE id = ? AND user_id = ?')
+      .get(id, userId) as { paper_id: string; language: string } | undefined;
+    if (attempt) {
+      recordExamAttempt({
+        attemptId: id,
+        userId,
+        language: attempt.language,
+        items: listItems(attempt.paper_id),
+        answers: input.answers,
+        writing: input.writing,
+        seconds: input.seconds,
+        createdAt: submittedAt,
+      });
+    }
+  } catch (err) {
+    logger.error('question attempts record failed', {
+      attemptId: id,
+      error: (err as Error).message,
+    });
+  }
 }
 
 export interface AttemptSummaryRow extends ExamAttemptRow {
@@ -583,6 +611,8 @@ export function deleteImportedPaper(id: string): boolean {
       .prepare("SELECT id FROM exam_papers WHERE id = ? AND import_file <> ''")
       .get(paperId);
     if (!exists) return false;
+    // 这份卷贡献的逐题记录与掌握度一并撤掉，成绩里不留一份已删除卷子的痕迹
+    purgePaperAttemptRecords(paperId);
     // 外键是 ON DELETE CASCADE，但这里显式删一遍：命令行/脚本直连库时关掉外键也不会留残渣
     db.prepare('DELETE FROM exam_attempts WHERE paper_id = ?').run(paperId);
     db.prepare('DELETE FROM exam_items WHERE paper_id = ?').run(paperId);

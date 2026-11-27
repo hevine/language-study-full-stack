@@ -13,6 +13,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { enLevel, enPhonology, enTaxonomy, enTokenizer, createEnSyntax } from '../adapters/en';
+import { createJaSyntax, jaLevel, jaPhonology, jaTaxonomy, jaTokenizer } from '../adapters/ja';
+import { createKoSyntax, koLevel, koPhonology, koTaxonomy, koTokenizer } from '../adapters/ko';
 import { runAgent, type AgentEvent, type AgentRuntime } from '../core';
 import { loadLanguagePacks } from '../lang/loader';
 import type { AgentDeps, LearnerStorePort, LlmPort, TracePort } from '../ports';
@@ -20,9 +22,9 @@ import type { AnnotatedDiff, AgentRun } from '../protocols';
 import { loadScenePacks } from '../scenes/loader';
 import { BUILTIN_TOOLS } from '../tools/builtin';
 import { ToolRegistry } from '../tools/registry';
-import type { LearnerProfile } from '../types';
+import type { LearnerProfile, LangCode } from '../types';
 
-const CANNED_DIFF: AnnotatedDiff = {
+const CANNED_DIFF_EN: AnnotatedDiff = {
   items: [
     {
       before: 'people is',
@@ -52,6 +54,60 @@ const CANNED_DIFF: AnnotatedDiff = {
   rewrite: undefined,
 };
 
+/**
+ * 韩语版批改样例（只补韩语，日语缺 —— 见下面 CANNED_DIFFS 的注释）：
+ *
+ * ruleId 必须落在 `lang/ko/errors.json` 里，否则 G5「有据可依」直接判不合规。
+ * 这正是韩语写作一直没能进离线评测的原因：原来唯一的样例是英文的，
+ * `sva` 不在韩语错因表里。
+ *
+ * 两条都刻意选**规则引擎抓不到的**（汉字词搭配、翻译腔），
+ * 因为批改的价值就在「模型补规则之外的判断」，评测也该测这一层。
+ */
+const CANNED_DIFF_KO: AnnotatedDiff = {
+  items: [
+    {
+      before: '이 현상의 이유를 두 가지로 봅니다',
+      after: '이 현상의 원인을 두 가지로 봅니다',
+      ruleId: 'sino-korean',
+      reason: '현상（现象）配 이유（理由）不如 원인（原因）贴切：현상은 관찰되는 것，원인是它背后的东西',
+      severity: 'should-fix',
+      accept: null,
+    },
+    {
+      before: '가족과 같이 살기가 어렵습니다',
+      after: '가족과 함께 살기 어렵습니다',
+      ruleId: 'translationese',
+      reason: '같이 是「一起」的口语说法，书面说明文里用 함께 更自然；살기가 的 기 也偏口语化',
+      severity: 'style',
+      accept: null,
+    },
+  ],
+  score: {
+    // 加权 ≈ 66，与规则侧（4 处命中 → 92-28=64）差 2 分，G3 双通道一致
+    dimensions: [
+      { id: 'content', name: '内容与课题执行', score: 68, weight: 0.35 },
+      { id: 'organization', name: '结构与连贯', score: 72, weight: 0.25 },
+      { id: 'language', name: '语法与语尾', score: 58, weight: 0.25 },
+      { id: 'lexical', name: '词汇与表达', score: 66, weight: 0.15 },
+    ],
+  },
+  rewrite: undefined,
+};
+
+/**
+ * 语种 → 批改样例。
+ *
+ * 用 Partial 而不是 Record：**缺样例时要报错，不能静默退回英文**。
+ * 静默退回的后果是「评测通过、G5 通过」——因为英文样例里的 ruleId 恰好也在英文表里，
+ * 于是没人发现这门语言的写作链路其实一次都没真跑过。
+ * 日语（`ja`）故意留空：JLPT 不考写作，场景层直接拒绝，加了也是死代码。
+ */
+const CANNED_DIFFS: Partial<Record<LangCode, AnnotatedDiff>> = {
+  en: CANNED_DIFF_EN,
+  ko: CANNED_DIFF_KO,
+};
+
 const CANNED_TREE = {
   nodes: [
     {
@@ -74,19 +130,41 @@ const CANNED_TREE = {
   difficulty: 6,
 };
 
-const fakeLlm: LlmPort = {
-  async json(req) {
-    if (req.tag === 'write.diff_review') return { data: CANNED_DIFF as never, tokens: 1500 };
-    if (req.tag === 'gra.parse') return { data: CANNED_TREE as never, tokens: 400 };
-    if (req.tag === 'gra.contrast') {
-      return { data: { points: [{ point: '中文没有冠词', note: '英语单数可数名词前必须有冠词' }] } as never, tokens: 120 };
-    }
-    throw new Error(`eval harness 未覆盖的模型调用：${req.tag}`);
-  },
-  async text() {
-    return { text: '', tokens: 0 };
-  },
-};
+/**
+ * 假 LLM：按 `req.tag` 返回固定结果。
+ *
+ * 为什么需要 `lang` 参数：`write.diff_review` 这个 tag 是**工具层**发的，不带语种后缀
+ * （`gra.contrast.ja` / `.ko` 之所以带，是因为 tag 由语言适配器自己发出）。
+ * 与其为了测试给生产代码的 tag 加后缀 —— 那会连带改前端 `labels.ts` 的精确匹配与成本归因口径 ——
+ * 不如让 harness 按用例语种造一个「会说这门语言的假模型」。
+ */
+function makeFakeLlm(lang: LangCode): LlmPort {
+  return {
+    async json(req) {
+      if (req.tag === 'write.diff_review') {
+        const canned = CANNED_DIFFS[lang];
+        if (!canned) {
+          throw new Error(`eval harness 还没有 ${lang} 的批改样例：补写作用例前先加 CANNED_DIFF_${lang.toUpperCase()}`);
+        }
+        return { data: canned as never, tokens: 1500 };
+      }
+      if (req.tag === 'gra.parse') return { data: CANNED_TREE as never, tokens: 400 };
+      if (req.tag === 'gra.contrast') {
+        return { data: { points: [{ point: '中文没有冠词', note: '英语单数可数名词前必须有冠词' }] } as never, tokens: 120 };
+      }
+      if (req.tag === 'gra.contrast.ja') {
+        return { data: { points: [{ point: '助词不靠语序', note: '中文靠位置定成分，日语靠助词' }] } as never, tokens: 100 };
+      }
+      if (req.tag === 'gra.contrast.ko') {
+        return { data: { points: [{ point: '은/는 与 이/가', note: '中文没有主题标记，韩语靠助词分已知与新信息' }] } as never, tokens: 100 };
+      }
+      throw new Error(`eval harness 未覆盖的模型调用：${req.tag}`);
+    },
+    async text() {
+      return { text: '', tokens: 0 };
+    },
+  };
+}
 
 function memoryStore(): LearnerStorePort {
   const errors = new Map<string, { count: number }>();
@@ -174,7 +252,8 @@ const EvalCaseSchema = z.object({
 });
 type EvalCase = z.infer<typeof EvalCaseSchema>;
 
-function buildRuntime(): AgentRuntime {
+function buildRuntime(lang: LangCode = 'en'): AgentRuntime {
+  const fakeLlm = makeFakeLlm(lang);
   const registry = new ToolRegistry();
   for (const tool of BUILTIN_TOOLS) registry.register(tool);
 
@@ -184,6 +263,22 @@ function buildRuntime(): AgentRuntime {
     taxonomy: enTaxonomy,
     phonology: enPhonology,
     level: enLevel,
+  };
+
+  const jaPorts = {
+    tokenizer: jaTokenizer,
+    syntax: createJaSyntax(fakeLlm),
+    taxonomy: jaTaxonomy,
+    phonology: jaPhonology,
+    level: jaLevel,
+  };
+
+  const koPorts = {
+    tokenizer: koTokenizer,
+    syntax: createKoSyntax(fakeLlm),
+    taxonomy: koTaxonomy,
+    phonology: koPhonology,
+    level: koLevel,
   };
 
   const deps: AgentDeps = {
@@ -215,7 +310,7 @@ function buildRuntime(): AgentRuntime {
         },
       },
     },
-    language: (code) => (code === 'en' ? enPorts : null),
+    language: (code) => (code === 'en' ? enPorts : code === 'ja' ? jaPorts : code === 'ko' ? koPorts : null),
     now: () => new Date(),
   };
 
@@ -320,11 +415,12 @@ async function runCase(item: EvalCase, runtime: AgentRuntime): Promise<string[]>
 
 async function main(): Promise<void> {
   const cases = loadCases();
-  const runtime = buildRuntime();
   let passed = 0;
   const details: string[] = [];
 
   for (const { item } of cases) {
+    // 每条用例按自己的语种造运行时：假模型要「会说这门语言」，否则韩语用例会拿到英文批改样例
+    const runtime = buildRuntime(item.input.lang);
     const failures = await runCase(item, runtime);
     if (failures.length === 0) {
       passed += 1;

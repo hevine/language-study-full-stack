@@ -1,5 +1,4 @@
 import { addDays, todayISO } from '../lib/date';
-import type { VocabRecord } from '../repositories/vocab';
 
 /** 0 忘记 / 1 模糊 / 2 记得 / 3 熟练 */
 export type Grade = 0 | 1 | 2 | 3;
@@ -12,10 +11,13 @@ export interface NextSchedule {
   dueDate: string;
 }
 
+/** 只要求调度需要的四个字段：词汇本和复习卡共用同一套算法 */
+export type Schedulable = Pick<NextSchedule, 'ease' | 'intervalDays' | 'reps' | 'lapses'>;
+
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 /** SM-2 简化版：只保留对自学最有效的四个档位 */
-export function scheduleNext(current: VocabRecord, grade: Grade): NextSchedule {
+export function scheduleNext(current: Schedulable, grade: Grade): NextSchedule {
   let ease = current.ease;
   let intervalDays = current.intervalDays;
   let reps = current.reps;

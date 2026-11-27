@@ -10,6 +10,7 @@
 ## 0. 一句话现状
 
 `en / ja / ko` 三套链路已经各自成立：计划 → 每日材料 → 命题 → 评分标准 → 批改 → 加练 → 试卷 → 朗读/语音，全部按 `plans.language` 走，并由 `npm run check:lang` 守门。
+「AI 学习台」（`server/src/agent`）同样三语同级：分词 / 句法 / 错因 / 音韵 / 等级五件套齐备，四个场景 `ready=true`，由 `npm run check:agent` 守门 —— 那半边的全貌见 **`HANDOVER-LANGUAGE-MATRIX.md`**，加新语种的操作顺序见 **`HANDOVER-NEW-LANGUAGE.md`**（本文只管主项目层）。
 新增第 4 门语言的成本 ≈ **8 类数据文件 + 20 余张映射表 + 6 处提示词/文案分支 + 1 个迁移**；TypeScript 会把「必须补的映射表」直接报出来，真正危险的是那些**编译能过、运行期静默退英文**的地方（见 §3.3 黑名单）。
 
 如果你只想知道「韩语那次为什么生成了托福任务」→ 直接跳 §4。
@@ -280,7 +281,7 @@ npm test        # explainSubtitle 单测
 
 ## 7. 已知遗留
 
-1. **`server/src/agent/lang/` 只有 `en` 和 `ja`，没有 `ko`。** 结果是韩语在「AI 学习台」里是**明确拒绝并给理由**（`loader.ts:sceneSupport` → 「这个语种还没有语言包」），不是静默走英文——这是刻意设计。要给新语种开学习台，得加 `<code>/lang.json` + `errors.json`，并实现对应 tokenizer/syntax 适配；加目录不够，`loader.ts` 的 `code` 枚举也要放开。
+1. ~~**`server/src/agent/lang/` 只有 `en` 和 `ja`，没有 `ko`。**~~ **已解决（2026-11-26）**：`lang/ko/` 与 `adapters/ko.ts` 已落地，`/api/agent/scenes` 里 `ko ready=true`，四个场景全部可跑。学习台层的全貌见 `HANDOVER-LANGUAGE-MATRIX.md`，加新语种的操作步骤见 `HANDOVER-NEW-LANGUAGE.md`。**注意两层成本差异**：学习台加一门语言 ≈ 2 个数据文件 + 1 个适配器 + 4 行装配；主项目层是本文 §3 那 30 个文件 + 1 个迁移。
 2. **`ui-kit` 是 `file:` 外部包**，`Language` 联合和 `DEFAULT_THEME` 在那边。只改本仓库会出现「前端类型对不上主题包」的怪错。
 3. **韩语词库是精选精讲，不是 TOPIK 全量**（`koLexicon.ts` 顶部已注明），各等级标注的是本库收录量。新增语种同样建议先精选，别承诺词表覆盖率。
 4. **`web/src/pages/UIKit.tsx:19`** 这类演示页仍写死三种语言，属展示用途，不接业务，优先级最低。

@@ -9,6 +9,7 @@
  * 不需要动 core/。这是「接入新语言不修改 core/」这条验收线的技术依据。
  */
 import type { ExplainDepth } from '../domain/explainVideo';
+import type { ClosureSpan, PitchProfile, ProsodyMeasurement } from '../domain/speech';
 import type {
   ErrorRecord,
   LangCode,
@@ -74,11 +75,35 @@ export interface ErrorTaxonomyPort {
 /** 发音评测。英语走 IPA 音素对齐，日语走モーラ时长 + アクセント 型比对 */
 export interface PhonologyPort {
   readonly lang: LangCode;
-  /** 无音频能力时返回 null，而不是编一个分数 —— 教育产品宁缺毋假 */
-  score(input: { audioRef: string; transcript: string; target?: string }): Promise<null | {
+  /**
+   * 无音频能力时返回 null，而不是编一个分数 —— 教育产品宁缺毋假。
+   *
+   * 现在能拿到的只有时间信息（词级时间戳 / 分段边界 / 声学停顿），
+   * 所以 measures 里承诺的是节奏，不是音素准确度：θ 读成 s 这件事，这套数据看不出来。
+   *
+   * rate 是「语速」的口径：英语按 词/分钟，日语按 モーラ/分钟。
+   * 单位必须由语言自己声明 —— 拿「词/分钟」去描述日语，用户看到的数字会莫名偏小一半。
+   */
+  score(input: {
+    audioRef: string;
+    transcript: string;
+    target?: string;
+    /** 前面的测量结果；为空表示没有可用音频（手打稿），必须返回 null */
+    measurement?: ProsodyMeasurement | null;
+  }): Promise<null | {
     overall: number;
     dimensions: Array<{ id: string; score: number; note: string }>;
     wordLevel: Array<{ word: string; score: number; hint?: string }>;
+    /** 语速口径：value / articulation 都按 unit 计（英語 wpm、日語 モーラ/分、韩语 音节/分） */
+    rate?: { value: number; articulation: number; unit: string; label: string };
+    /**
+     * 这次评分**真的用到了**哪些波形量。
+     *
+     * 产物里挂不挂 pitch/closures，应该由语言自己决定，而不是在工具层写
+     * if (lang === 'ja') —— 英语报告挂着两个不参与评分的数字，只会让人猜它们是什么意思；
+     * 而日语/韩语的抑扬分确实来自 pitch，不挂上去又说不清分数哪来的。
+     */
+    prosody?: { pitch?: PitchProfile; closures?: ClosureSpan[] };
   }>;
 }
 
@@ -123,13 +148,27 @@ export interface LlmJsonRequest<T> {
   temperature?: number;
   maxTokens?: number;
   /**
-   * 是否让模型先思考再答。默认 'off'（交互优先）。
-   * 需要质量的深评类步骤（作文批改）由内核显式传 'on'。
+   * 这一步要什么样的线路。默认 'interactive'。
+   *
+   * 内核只声明需求、不点名模型：句子拆解和写作批改都声明 'interactive'，
+   * 就自动拿到同一批「能关思考的快线」，将来加场景零配置。
+   * 深评类步骤传 'deep'（允许思考、旗舰优先），长输出传 'long-output'（排除思考不可关的线路）。
+   */
+  profile?: LlmProfile;
+  /**
+   * 是否让模型先思考再答。不传则跟随 profile。
+   * 只在「这一步既不属于任何画像、又必须关/开思考」时才显式指定。
    */
   thinking?: 'auto' | 'off' | 'on';
   /** 用于成本归因与日志定位，如 'write.diff_review' */
   tag: string;
 }
+
+/**
+ * 请求画像。字面量与 services/lineCaps.ts 的 RunProfile 一致，
+ * 这里单独声明是为了让内核不依赖 services 层（Port 只依赖自己的类型）。
+ */
+export type LlmProfile = 'balanced' | 'interactive' | 'long-output' | 'deep' | 'vision';
 
 /**
  * 模型调用。故意不暴露「用哪个模型」——号池与降级由适配器决定，
@@ -138,7 +177,14 @@ export interface LlmJsonRequest<T> {
 export interface LlmPort {
   json<T>(req: LlmJsonRequest<T>): Promise<{ data: T; tokens: number }>;
   text(
-    req: { system: string; user: string; maxTokens?: number; thinking?: 'auto' | 'off' | 'on'; tag: string },
+    req: {
+      system: string;
+      user: string;
+      maxTokens?: number;
+      profile?: LlmProfile;
+      thinking?: 'auto' | 'off' | 'on';
+      tag: string;
+    },
   ): Promise<{ text: string; tokens: number }>;
 }
 
@@ -247,12 +293,42 @@ export interface TracePort {
 // 装配
 // ---------------------------------------------------------------------------
 
+export interface AsrPort {
+  /**
+   * 转写一段录音。
+   * audioRef 是录音仓里的 audioId（不是文件路径）—— 内核不需要知道字节存在哪；
+   * lang 决定上游用哪种语言提示词，缺省英语。
+   *
+   * measurement 是顺带测到的节奏：识别一次就能同时拿到文本与时间，
+   * 不返回来等于把同一段音频再解码一遍。
+   */
+  transcribe(audioRef: string, lang?: LangCode): Promise<{
+    text: string;
+    ms: number;
+    confidence: number;
+    measurement?: ProsodyMeasurement | null;
+  }>;
+
+  /**
+   * 只测量、不识别。
+   *
+   * 用户录完音先在界面上转写过、甚至动手改过稿子 —— 那条路已经把录音转过一次了。
+   * run 里再识别一遍会覆盖他改对的词，所以这里只要节奏。
+   *
+   * lang 决定「说了多少单位」怎么数：英语数词，日语数モーラ。
+   * 不给 lang 就按英语数，日语会数出 0，测量直接判为不可用。
+   */
+  measure(audioRef: string, text: string, lang?: LangCode): Promise<ProsodyMeasurement | null>;
+}
+
 export interface AgentDeps {
   llm: LlmPort;
   store: LearnerStorePort;
   tasks: TaskPort;
   media: MediaPort;
   trace: TracePort;
+  /** 语音识别；独立端接 local-asr 或 Whisper API，主项目可不接 */
+  asr?: AsrPort;
   /** 按语种取能力；不支持的语种返回 null，由路由器在规划前裁剪 */
   language(code: LangCode): LanguagePorts | null;
   /** 共享的元信息，给 provenance 与日志用 */

@@ -141,8 +141,82 @@ export interface AgentRunInput {
   scene?: string;
   /** 阅读类场景必填：讲解视频按文章生成 */
   articleId?: string;
+  /** 口语场景：POST /agent/audio 上传后拿到的录音 id */
+  audioRef?: string;
+  audioName?: string;
+  audioDurationMs?: number;
+  audioSource?: AgentAudioSource;
+  /** 文本框里的内容是手打的、录音转写的，还是转写后改过的 */
+  transcriptSource?: TranscriptSource;
   helpLevel?: AgentHelpLevel;
   userId?: string;
+}
+
+export type AgentAudioSource = 'recorder' | 'file' | 'recorder-pen';
+
+export type TranscriptSource = 'typed' | 'asr' | 'asr-edited';
+
+/** 录音仓里的一段音频；url 可直接给 <audio src> */
+export interface AgentAudio {
+  audioId: string;
+  name: string;
+  ext: string;
+  bytes: number;
+  durationMs: number | null;
+  source: AgentAudioSource;
+  lang: string;
+  createdAt: string;
+  url: string;
+}
+
+/**
+ * 口语评估产物。
+ * basis 是这次评估的依据：录音转写 / 改过的稿 / 手打文本 —— 回看时必须能分清，
+ * 否则 88 分到底是「口语实测」还是「文稿评分」就永远说不清。
+ */
+/**
+ * 节奏实测。服务端用词级时间戳或声学停顿测出来的硬数据，
+ * 与 LLM 的文本判断分开显示 —— 「停了 7 次」和「读起来不流利」是两回事。
+ */
+export interface ProsodyPayload {
+  source: 'asr-words' | 'asr-segments' | 'vad';
+  sourceLabel: string;
+  note: string;
+  durationMs: number;
+  wordCount: number;
+  wpm: number;
+  articulationWpm: number;
+  /** 语速口径：英语「词/分钟」，日语「モーラ/分钟」。服务端没给时按词计。 */
+  paceLabel?: string;
+  pauseCount: number;
+  longestPauseMs: number;
+  speechRatio: number;
+  leadInMs: number;
+  pauses: Array<{ startMs: number; endMs: number }>;
+  /** 整段音高轮廓；只有从波形量得出来时才有 */
+  pitch?: { medianHz: number; p10Hz: number; p90Hz: number; rangeSemitones: number; voicedRatio: number };
+  /** 60–220ms 的短闭塞：促音候选，含正常闭锁，别当促音个数 */
+  closures?: Array<{ startMs: number; endMs: number }>;
+  dimensions: Array<{ id: string; score: number; note: string }>;
+  wordLevel: Array<{ word: string; score: number; hint?: string }>;
+}
+
+export interface SpeakingReportPayload {
+  dimensions: Array<{ id: 'fluency' | 'grammar' | 'coherence' | 'lexical'; score: number; note: string }>;
+  overall: number;
+  band?: string;
+  suggestions: string[];
+  summary: string;
+  basis?: {
+    source: TranscriptSource;
+    sourceLabel: string;
+    transcript: string;
+    durationMs: number | null;
+    audioRef: string | null;
+    phonology: boolean;
+  };
+  /** 没有实测（手打稿 / 太短 / 解码失败）时整块缺省，界面不显示实测区 */
+  prosody?: ProsodyPayload;
 }
 
 /** 历史列表只给摘要（trace 文件里存全文，列表页不该把全部 payload 拉一遍） */
@@ -262,4 +336,16 @@ export interface AgentAdoptResult {
   } | null;
   /** 产物挂进任务 + 错因进了复诊队列；只有 confirm=true 时才可能为 true */
   closedLoop: boolean;
+  /** 产物派生出的复习卡：confirm=false 时只有 preview */
+  cards?: {
+    preview: Array<{
+      kind: 'error' | 'sentence' | 'word';
+      front: string;
+      back: string;
+      context?: string;
+      ruleId?: string;
+      sourceRef?: string;
+    }>;
+    created: number;
+  };
 }

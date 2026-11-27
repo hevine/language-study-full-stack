@@ -14,6 +14,7 @@ import {
   type FailureInfo,
   type PoolCandidate,
 } from './keyPool';
+import { PROFILE_RULES, QUALITY_ORDER, capabilitiesOf, type LineCaps, type RunProfile } from './lineCaps';
 
 export interface LlmConfig {
   baseUrl: string;
@@ -182,6 +183,90 @@ export function poolKeyViews() {
   return listPoolKeys();
 }
 
+/** 某条线在某类请求下的处置 */
+export type LineDecision = 'active' | 'deferred' | 'excluded';
+
+export interface LineDispatchRow {
+  label: string;
+  model: string;
+  providerName: string;
+  priority: number;
+  /** 号池当前状态（ready / cooling / exhausted…） */
+  status: string;
+  caps: LineCaps;
+  decision: LineDecision;
+  /** 为什么是这个处置，直接给界面用 */
+  note: string;
+}
+
+export interface LineDispatchView {
+  profile: RunProfile;
+  desc: string;
+  thinking: 'auto' | 'off' | 'on';
+  rows: LineDispatchRow[];
+  /** 筛选后一条不剩时回落全池，界面要能提示「画像没配上」 */
+  fellBack: boolean;
+}
+
+/**
+ * 线路调度预览：每种请求画像下，每条线路会怎样。
+ *
+ * 这是给运维看的，不是给调用链用的 —— 不删线路的前提是「看得见它此刻不用」，
+ * 否则过两周没人记得 glm-4v-flash 为什么一直在池子里却没被调用过。
+ * 基于 listPoolKeys() 而不是 poolCandidates()：冷却中的线路也要列出来，
+ * 不然界面只剩两三条，像丢了一样。
+ */
+export function lineDispatchPreview(): LineDispatchView[] {
+  const keys = listPoolKeys().filter((key) => key.enabled);
+  const profiles = Object.keys(PROFILE_RULES) as RunProfile[];
+
+  return profiles.map((profile) => {
+    const rule = PROFILE_RULES[profile];
+    const rows: LineDispatchRow[] = keys.map((key) => {
+      const caps = capabilitiesOf(key.model, key.providerId, { lastError: key.lastError });
+      const accepted = rule.accept(caps);
+      const deferred = accepted && Boolean(rule.deferAlwaysThinking) && caps.thinking === 'always';
+      const decision: LineDecision = !accepted ? 'excluded' : deferred ? 'deferred' : 'active';
+      const note =
+        decision === 'excluded'
+          ? `不参与：${caps.reason}`
+          : decision === 'deferred'
+            ? `可用但垫后：${caps.reason}，只能降推理档`
+            : `参与：${caps.reason}`;
+      return {
+        label: key.label,
+        model: key.model,
+        providerName: key.providerName,
+        priority: key.priority,
+        status: key.status,
+        caps,
+        decision,
+        note,
+      };
+    });
+
+    // 与真实轮换同序：参与 → 垫后 → 排除；同组内保持号池 priority，deep 再按质量重排
+    const rank: Record<LineDecision, number> = { active: 0, deferred: 1, excluded: 2 };
+    rows.sort((a, b) => {
+      if (rank[a.decision] !== rank[b.decision]) return rank[a.decision] - rank[b.decision];
+      if (rule.preferQuality) {
+        const diff = QUALITY_ORDER[a.caps.tier] - QUALITY_ORDER[b.caps.tier];
+        if (diff !== 0) return diff;
+      }
+      return a.priority - b.priority;
+    });
+
+    const usable = rows.filter((row) => row.decision !== 'excluded');
+    return {
+      profile,
+      desc: rule.desc,
+      thinking: rule.thinking,
+      rows,
+      fellBack: usable.length === 0,
+    };
+  });
+}
+
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
@@ -202,8 +287,17 @@ interface ChatOptions {
    */
   timeoutMs?: number;
   /**
+   * 本次调用要什么样的线路。决定「哪些线路参与」+「默认要不要开思维链」。
+   *
+   * 调用方只声明需求，不点名模型——这样换线路不用改场景代码，新场景也自动继承。
+   * 默认 'balanced' 不筛选，保持历史行为。
+   * 详见 services/lineCaps.ts 的 PROFILE_RULES。
+   */
+  profile?: RunProfile;
+  /**
    * 是否允许模型「先想再答」。
    *
+   * 不传则跟随 profile（interactive/long-output 为 off，deep 为 on）。
    * - 默认 'auto'：什么都不发，保持各家平台自己的默认行为（多数思考型模型默认开）。
    * - 'off'：交互路径请显式传它。实测同一把 Key、同一句长难句、同一个规划任务，
    *   glm-4.5-air 从 9.5s 降到 2.1~2.5s，正文长度基本不变（427~476 字 vs 426 字）。
@@ -302,6 +396,14 @@ function emptyContentError(meta: { finishReason?: string; hasReasoning: boolean 
 
 /** 真正发一次请求；jsonMode 决定要不要带 response_format */
 /**
+ * 生效的思考策略：显式指定优先，其次跟随请求画像，最后回落到平台默认。
+ * 放在一处算，避免 requestOnce 的几处重发路径各算一遍导致行为不一致。
+ */
+function effectiveThinking(options: ChatOptions): 'auto' | 'off' | 'on' {
+  return options.thinking ?? PROFILE_RULES[options.profile ?? 'balanced'].thinking;
+}
+
+/**
  * 「关掉思维链」时该往请求体里塞什么。
  *
  * 各家字段不一样，而且不是所有模型都允许关，所以这里按平台 + 模型名分派，
@@ -351,7 +453,7 @@ async function requestOnce(
         messages,
         temperature: options.temperature ?? 0.7,
         max_tokens: options.maxTokens ?? 2400,
-        ...thinkingPatch(config, options.thinking ?? 'auto'),
+        ...thinkingPatch(config, effectiveThinking(options)),
         ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
       }),
       signal: controller.signal,
@@ -495,11 +597,70 @@ async function callOnce(
   throw wrapped;
 }
 
+/**
+ * 按请求画像挑线路：谁参与、谁垫后。
+ *
+ * 与「优先级队列」的分工：号池的 priority 仍然决定同档内的先后，这里只做两件事 ——
+ * 一是把「必失败」的组合踢出本次队列（视觉专用模型收到纯文本请求），
+ * 二是把「能跑但明显更差」的线路垫后（交互档里关不掉思考的线路）。
+ *
+ * 硬排除之后如果一条都不剩，回落到全池：画像推导靠模型名，总有认不出的时候，
+ * 标签配错顶多慢一点，不能因为配错就拒绝服务。
+ */
+function candidatesFor(profile: RunProfile): { queue: PoolCandidate[]; excluded: PoolCandidate[]; fellBack: boolean } {
+  const rule = PROFILE_RULES[profile];
+  const all = poolCandidates();
+  if (profile === 'balanced') return { queue: all, excluded: [], fellBack: false };
+
+  const caps = new Map<PoolCandidate, LineCaps>();
+  for (const candidate of all) {
+    caps.set(candidate, capabilitiesOf(candidate.model, candidate.providerId, { lastError: candidate.lastError }));
+  }
+
+  const accepted: PoolCandidate[] = [];
+  const excluded: PoolCandidate[] = [];
+  for (const candidate of all) {
+    if (rule.accept(caps.get(candidate)!)) accepted.push(candidate);
+    else excluded.push(candidate);
+  }
+
+  if (accepted.length === 0) {
+    logger.warn('按画像筛选后无可用线路，回落全池', {
+      profile,
+      excluded: excluded.map((item) => item.model),
+    });
+    return { queue: all, excluded, fellBack: true };
+  }
+
+  let queue = accepted;
+  if (rule.deferAlwaysThinking) {
+    const soft = (candidate: PoolCandidate): boolean => caps.get(candidate)?.thinking === 'always';
+    queue = [...queue.filter((item) => !soft(item)), ...queue.filter(soft)];
+  }
+  if (rule.preferQuality) {
+    // sort 是稳定的：同档内保留号池 priority 的原始顺序
+    queue = [...queue].sort(
+      (a, b) => QUALITY_ORDER[caps.get(a)!.tier] - QUALITY_ORDER[caps.get(b)!.tier],
+    );
+  }
+
+  if (excluded.length > 0) {
+    logger.debug('画像筛选排除线路', {
+      profile,
+      excluded: excluded.map((item) => `${item.model}（${caps.get(item)?.reason}）`),
+    });
+  }
+  return { queue, excluded, fellBack: false };
+}
+
 /** 号池轮换顺序：上次成功的优先，其余按优先级；手动传入的配置不参与轮换 */
-function rotationOrder(config: LlmConfig): Array<{ config: LlmConfig; keyId: string | null; label: string }> {
+function rotationOrder(
+  config: LlmConfig,
+  options: ChatOptions = {},
+): Array<{ config: LlmConfig; keyId: string | null; label: string }> {
   if (!config.pool) return [{ config, keyId: config.keyId ?? null, label: config.label ?? config.model }];
 
-  const candidates = poolCandidates();
+  const { queue: candidates } = candidatesFor(options.profile ?? 'balanced');
   const preferred =
     lastGoodKeyId !== undefined ? candidates.find((item) => item.keyId === lastGoodKeyId) : undefined;
   const ordered = preferred ? [preferred, ...candidates.filter((item) => item !== preferred)] : candidates;
@@ -556,7 +717,7 @@ export async function chat(
   messages: ChatMessage[],
   options: ChatOptions = {},
 ): Promise<string> {
-  const order = rotationOrder(config);
+  const order = rotationOrder(config, options);
   if (order.length === 0) {
     throw new UpstreamError('没有可用的模型线路', {
       hint: '到「设置 → 模型 Key 池」添加一条线路，或等待冷却结束',

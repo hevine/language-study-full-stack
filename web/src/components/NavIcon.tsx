@@ -8,6 +8,7 @@ export type NavIconName =
   | 'practice'
   | 'plan'
   | 'vocab'
+  | 'grammar'
   | 'exam'
   | 'media'
   | 'listen'
@@ -127,6 +128,18 @@ function draw(name: NavIconName, grad: string) {
           <path d="M12 6.9C9.9 5.4 7.1 4.7 4.4 4.9v13.1c2.7-.2 5.5.5 7.6 2 2.1-1.5 4.9-2.2 7.6-2V4.9c-2.7-.2-5.5.5-7.6 2z" />
           <path d="M12 6.9v13.1" opacity="0.5" />
           <path d="M15.9 5.1v5.6l1.75-1.45L19.4 10.7V5.35" fill={grad} stroke="none" />
+        </g>
+      );
+
+    // 语法库：句子骨架「成分 + 成分」两节方块，下面一道主题色的结构弧线把它们连起来
+    case 'grammar':
+      return (
+        <g>
+          <rect x="3.4" y="5.6" width="6.4" height="5.6" rx="1.6" />
+          <rect x="14.2" y="5.6" width="6.4" height="5.6" rx="1.6" />
+          <path d="M11.2 8.4h1.6" strokeWidth={1.9} opacity="0.85" />
+          <path d="M12 14.4v1.6" opacity="0.6" />
+          <path d="M5.6 19.6l6.4-3.6 6.4 3.6" stroke={grad} strokeWidth={1.8} />
         </g>
       );
 

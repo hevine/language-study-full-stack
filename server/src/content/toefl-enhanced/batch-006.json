@@ -1,0 +1,352 @@
+[
+  {
+    "code": "EN-V-0251",
+    "cn": "干燥的；弄干",
+    "mnemonic": "dry 谐音「拽」→把水分拽走，「干燥的」；反 wet(湿的)。",
+    "example": "The dry season leaves the grassland short of water.",
+    "exampleCn": "旱季使这片草原缺水。"
+  },
+  {
+    "code": "EN-V-0252",
+    "cn": "在…期间",
+    "mnemonic": "during=du(持续)+ring→贯穿整个过程，「在…期间」；近 throughout。",
+    "example": "Attendance was recorded during each lecture this term.",
+    "exampleCn": "本学期每节课都记录了出勤情况。"
+  },
+  {
+    "code": "EN-V-0253",
+    "cn": "责任；职责；税",
+    "mnemonic": "du(该做)+ty→该做的事，「责任/职责」，也指「关税」。",
+    "example": "Every citizen has a duty to obey the law.",
+    "exampleCn": "每个公民都有遵守法律的责任。"
+  },
+  {
+    "code": "EN-V-0254",
+    "cn": "早期的；早",
+    "mnemonic": "ear(耳)+ly→天刚亮耳朵就竖起来，「早的/早期」；反 late。",
+    "example": "Early results suggest the treatment may be effective.",
+    "exampleCn": "早期结果表明这种疗法可能有效。"
+  },
+  {
+    "code": "EN-V-0255",
+    "cn": "赚取；挣得",
+    "mnemonic": "earn 谐音「厄恩」→辛苦劳动「赚取」报酬；名词 earnings。",
+    "example": "Students can earn credits by completing the field project.",
+    "exampleCn": "学生可以通过完成田野项目赚取学分。"
+  },
+  {
+    "code": "EN-V-0256",
+    "cn": "地球；土地",
+    "mnemonic": "earth 联想「厄斯」→我们脚下这颗星球，「地球/土地」；派 earthquake。",
+    "example": "Scientists study how energy moves through the earth's crust.",
+    "exampleCn": "科学家研究能量如何在地壳中传递。"
+  },
+  {
+    "code": "EN-V-0257",
+    "cn": "容易的",
+    "mnemonic": "easy 谐音「伊西」→不费力气，「容易的」；反 difficult；派 easily。",
+    "example": "The professor made the concept easy to understand.",
+    "exampleCn": "教授把这个概念讲得容易理解。"
+  },
+  {
+    "code": "EN-V-0258",
+    "cn": "吃；进食",
+    "mnemonic": "eat 谐音「伊特」→把食物送进嘴里，「吃」；过去式 ate。",
+    "example": "Patients should eat a balanced diet to recover faster.",
+    "exampleCn": "病人应均衡饮食以便更快康复。"
+  },
+  {
+    "code": "EN-V-0259",
+    "cn": "边缘",
+    "mnemonic": "edge 谐音「爱只」→只站在边界一线，「边缘」；近 border。",
+    "example": "The village sits on the edge of a dense forest.",
+    "exampleCn": "这个村庄坐落在一片茂密森林的边缘。"
+  },
+  {
+    "code": "EN-V-0260",
+    "cn": "教育；教导",
+    "mnemonic": "e+duc(引导)+ate→把学生引导出来，「教育」；名词 education。",
+    "example": "The program aims to educate students about water conservation.",
+    "exampleCn": "该项目旨在教育学生节约用水。"
+  },
+  {
+    "code": "EN-V-0261",
+    "cn": "努力",
+    "mnemonic": "ef+fort(力气)→使出力气，「努力」；形容词 effortless(毫不费力的)。",
+    "example": "The team's efforts finally produced a working model.",
+    "exampleCn": "团队的努力终于造出了一个可运行的模型。"
+  },
+  {
+    "code": "EN-V-0262",
+    "cn": "两者之一；也",
+    "mnemonic": "either 联想「二选一」→两者任选其一，「或者」；否定句中表「也」。",
+    "example": "You may choose either topic for the final essay.",
+    "exampleCn": "期末论文你可以任选其中一个题目。"
+  },
+  {
+    "code": "EN-V-0263",
+    "cn": "雇用；使用",
+    "mnemonic": "em+ploy(用)→把人用起来，「雇用」，也指「使用」方法；反 dismiss。",
+    "example": "The company employs over two hundred researchers.",
+    "exampleCn": "这家公司雇用了两百多名研究员。"
+  },
+  {
+    "code": "EN-V-0264",
+    "cn": "空的；倒空",
+    "mnemonic": "emp(空)+ty→里面什么都没有，「空的」；反 full。",
+    "example": "The lecture hall was empty by ten o'clock.",
+    "exampleCn": "十点时阶梯教室已经空了。"
+  },
+  {
+    "code": "EN-V-0265",
+    "cn": "鼓励",
+    "mnemonic": "en+courage(勇气)→给足勇气，「鼓励」；反 discourage(使气馁)。",
+    "example": "Tutors encourage students to ask questions in class.",
+    "exampleCn": "导师鼓励学生在课堂上提问。"
+  },
+  {
+    "code": "EN-V-0266",
+    "cn": "结束；末端",
+    "mnemonic": "end 联想「终点」→事情到头，「结束/末端」；反 begin。",
+    "example": "The seminar came to an end after three hours.",
+    "exampleCn": "研讨会进行了三个小时后结束。"
+  },
+  {
+    "code": "EN-V-0267",
+    "cn": "敌人",
+    "mnemonic": "en+emy(恨)→心怀仇恨的一方，「敌人」；反 ally(盟友)。",
+    "example": "In the story, the hero must face a powerful enemy.",
+    "exampleCn": "故事里，主人公必须面对一个强大的敌人。"
+  },
+  {
+    "code": "EN-V-0268",
+    "cn": "能量；精力",
+    "mnemonic": "en+erg(工作)+y→能做功的本领，「能量」，人也指「精力」。",
+    "example": "Solar panels convert sunlight into usable energy.",
+    "exampleCn": "太阳能板把阳光转化为可用的能量。"
+  },
+  {
+    "code": "EN-V-0269",
+    "cn": "享受；喜爱",
+    "mnemonic": "en+joy(快乐)→处在快乐中，「享受/喜爱」；名词 enjoyment。",
+    "example": "We enjoyed the field trip to the botanical garden.",
+    "exampleCn": "我们很享受去植物园的实地考察。"
+  },
+  {
+    "code": "EN-V-0270",
+    "cn": "进入",
+    "mnemonic": "enter 联想「走进」→跨过门槛「进入」；反 exit(出去)；派 entrance。",
+    "example": "Visitors must enter the building through the north gate.",
+    "exampleCn": "访客必须从北门进入大楼。"
+  },
+  {
+    "code": "EN-V-0271",
+    "cn": "逃脱；逃离",
+    "mnemonic": "es+cape(披风)→挣脱束缚溜走，「逃脱」；名词 escapee(逃亡者)。",
+    "example": "The bird escaped from its cage at dawn.",
+    "exampleCn": "这只鸟在黎明时从笼子里逃走了。"
+  },
+  {
+    "code": "EN-V-0272",
+    "cn": "尤其；特别",
+    "mnemonic": "especial(特别的)+ly→特别地，「尤其」；近 particularly。",
+    "example": "The book is useful, especially for first-year students.",
+    "exampleCn": "这本书很有用，尤其对大一学生。"
+  },
+  {
+    "code": "EN-V-0273",
+    "cn": "甚至；平坦的",
+    "mnemonic": "even 联想「连…都」→递进「甚至」；本义「平坦的/偶数」。",
+    "example": "Even beginners can follow the simple instructions.",
+    "exampleCn": "连初学者都能看懂这些简单说明。"
+  },
+  {
+    "code": "EN-V-0274",
+    "cn": "事件；大事",
+    "mnemonic": "e+vent(来)→来到眼前的事，「事件/大事」；近 occurrence。",
+    "example": "The founding of the university was a major event in the city.",
+    "exampleCn": "这所大学的成立是这座城市的一件大事。"
+  },
+  {
+    "code": "EN-V-0275",
+    "cn": "曾经；一直",
+    "mnemonic": "ever 联想「永远」→在任何时候，「曾经/一直」，常用于疑问句。",
+    "example": "Has any student ever won the award twice?",
+    "exampleCn": "有学生曾经两次获得这个奖吗？"
+  },
+  {
+    "code": "EN-V-0276",
+    "cn": "每个",
+    "mnemonic": "every 联想「全体中的每一个」→「每个」；近 each，但更强调整体。",
+    "example": "Every applicant must submit the form online.",
+    "exampleCn": "每位申请人都必须在线提交表格。"
+  },
+  {
+    "code": "EN-V-0277",
+    "cn": "精确的；确切的",
+    "mnemonic": "ex+act(做)→照原样做出，「精确的」；反 approximate(近似的)。",
+    "example": "The exact figure appears in the second table.",
+    "exampleCn": "确切数字出现在第二个表格中。"
+  },
+  {
+    "code": "EN-V-0278",
+    "cn": "兴奋的",
+    "mnemonic": "ex+cit(唤起)+ed→被唤起情绪，「兴奋的」；动词 excite。",
+    "example": "The children were excited about the science demonstration.",
+    "exampleCn": "孩子们对这场科学演示感到兴奋。"
+  },
+  {
+    "code": "EN-V-0279",
+    "cn": "锻炼；练习",
+    "mnemonic": "ex+erc(使出)+ise→使出体力，「锻炼」，也指「练习」。",
+    "example": "Doctors recommend regular exercise to improve heart health.",
+    "exampleCn": "医生建议经常锻炼以改善心脏健康。"
+  },
+  {
+    "code": "EN-V-0280",
+    "cn": "经验；经历",
+    "mnemonic": "ex+peri(尝试)+ence→亲身尝试过，「经验/经历」；派 experienced。",
+    "example": "She gained valuable experience during her internship.",
+    "exampleCn": "她在实习期间获得了宝贵的经验。"
+  },
+  {
+    "code": "EN-V-0281",
+    "cn": "额外的；附加物",
+    "mnemonic": "extra 联想「超出」→超出正常量，「额外的」；近 additional。",
+    "example": "Students may request extra time for the exam.",
+    "exampleCn": "学生可以申请考试延长时间。"
+  },
+  {
+    "code": "EN-V-0282",
+    "cn": "公平的；集市",
+    "mnemonic": "fair 联想「公平」→不偏不倚，「公平的」，也指「集市」。",
+    "example": "The judge made a fair decision based on the evidence.",
+    "exampleCn": "法官根据证据做出了公平的决定。"
+  },
+  {
+    "code": "EN-V-0283",
+    "cn": "下降；跌倒；秋天",
+    "mnemonic": "fall 联想「落」→数字往下「落」，「下降」，也指「跌倒/秋天」。",
+    "example": "Enrollment fell slightly compared with last year.",
+    "exampleCn": "与去年相比，入学人数略有下降。"
+  },
+  {
+    "code": "EN-V-0284",
+    "cn": "熟悉的",
+    "mnemonic": "famil(家庭)+iar→像家人一样了解，「熟悉的」；反 unfamiliar。",
+    "example": "The professor is familiar with recent studies in this field.",
+    "exampleCn": "教授熟悉这一领域近期的研究。"
+  },
+  {
+    "code": "EN-V-0285",
+    "cn": "著名的",
+    "mnemonic": "fame(名声)+ous→有名声的，「著名的」；近 renowned。",
+    "example": "The university is famous for its research in astronomy.",
+    "exampleCn": "这所大学以天文学研究而闻名。"
+  },
+  {
+    "code": "EN-V-0286",
+    "cn": "远的；远",
+    "mnemonic": "far 联想「远」→距离大，「远的」；比较级 farther/further。",
+    "example": "The museum is too far to walk from campus.",
+    "exampleCn": "博物馆离校园太远，走不到。"
+  },
+  {
+    "code": "EN-V-0287",
+    "cn": "农场；耕种",
+    "mnemonic": "farm 联想「种田」→耕种之地，「农场」，动词指「耕种」。",
+    "example": "The family farm grows wheat and corn each year.",
+    "exampleCn": "这个家庭农场每年种植小麦和玉米。"
+  },
+  {
+    "code": "EN-V-0288",
+    "cn": "快的；快速地",
+    "mnemonic": "fast 谐音「发斯特」→速度快，「快的」；反 slow。",
+    "example": "The train runs fast enough to arrive before noon.",
+    "exampleCn": "这列火车跑得够快，能在中午前到达。"
+  },
+  {
+    "code": "EN-V-0289",
+    "cn": "恐惧；害怕",
+    "mnemonic": "fear 谐音「费尔」→心里发毛，「恐惧」；反 courage(勇气)。",
+    "example": "Many people fear the effects of climate change.",
+    "exampleCn": "许多人害怕气候变化带来的影响。"
+  },
+  {
+    "code": "EN-V-0290",
+    "cn": "喂养；供给",
+    "mnemonic": "feed 联想「喂」→给食物，「喂养」，也指「供给」原料。",
+    "example": "Farmers feed the cattle before sunrise.",
+    "exampleCn": "农民在日出前喂养牛群。"
+  },
+  {
+    "code": "EN-V-0291",
+    "cn": "感觉；摸",
+    "mnemonic": "feel 联想「抚」→用手摸、用心「感觉」；过去式 felt。",
+    "example": "Students feel more confident after the practice session.",
+    "exampleCn": "练习课后学生感觉更自信了。"
+  },
+  {
+    "code": "EN-V-0292",
+    "cn": "很少的；几个",
+    "mnemonic": "few 联想「很少」→数量不多，「很少的」；反 many；比较级 fewer。",
+    "example": "Few students missed the optional field trip.",
+    "exampleCn": "几乎没有学生错过这次可选的实地考察。"
+  },
+  {
+    "code": "EN-V-0293",
+    "cn": "领域；田地",
+    "mnemonic": "field 本义「田地」→引申为研究「领域」；派 fieldwork(田野调查)。",
+    "example": "Sociology is a field that studies human society.",
+    "exampleCn": "社会学是研究人类社会的领域。"
+  },
+  {
+    "code": "EN-V-0294",
+    "cn": "填满；装满",
+    "mnemonic": "fill 联想「满」→使容器变满，「填满」；反 empty(倒空)。",
+    "example": "Please fill the bottle with distilled water.",
+    "exampleCn": "请把瓶子装满蒸馏水。"
+  },
+  {
+    "code": "EN-V-0295",
+    "cn": "电影；拍摄",
+    "mnemonic": "film 本义「薄膜/胶卷」→「电影」，动词指「拍摄」。",
+    "example": "The class watched a film about coral reefs.",
+    "exampleCn": "全班看了一部关于珊瑚礁的电影。"
+  },
+  {
+    "code": "EN-V-0296",
+    "cn": "最终的；决赛",
+    "mnemonic": "fin(结束)+al→最后的，「最终的」，也指「决赛」；派 finally。",
+    "example": "The final exam will be held next Monday.",
+    "exampleCn": "期末考试将于下周一举行。"
+  },
+  {
+    "code": "EN-V-0297",
+    "cn": "完成；结束",
+    "mnemonic": "fin(终)+ish→做到终点，「完成」；近 complete。",
+    "example": "The team finished the survey ahead of schedule.",
+    "exampleCn": "团队提前完成了这项调查。"
+  },
+  {
+    "code": "EN-V-0298",
+    "cn": "火；火灾；解雇",
+    "mnemonic": "fire 联想「火」→「火灾」，口语中也指「解雇」。",
+    "example": "A forest fire spread quickly during the dry season.",
+    "exampleCn": "旱季里一场森林火灾迅速蔓延。"
+  },
+  {
+    "code": "EN-V-0299",
+    "cn": "鱼；捕鱼",
+    "mnemonic": "fish 联想「鱼」→水里的「鱼」，动词指「捕鱼」。",
+    "example": "Biologists study how fish adapt to warmer waters.",
+    "exampleCn": "生物学家研究鱼类如何适应变暖的水域。"
+  },
+  {
+    "code": "EN-V-0300",
+    "cn": "适合；健康的",
+    "mnemonic": "fit 联想「合适」→尺寸或需求「适合」，也指身体「健康的」。",
+    "example": "Regular exercise keeps older adults fit and strong.",
+    "exampleCn": "经常锻炼使老年人健康强壮。"
+  }
+]

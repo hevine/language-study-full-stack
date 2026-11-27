@@ -21,8 +21,13 @@ const ImportInput = z.object({
   limit: z.number().int().min(1).max(500).optional(),
 });
 
+/** 旧的英语三档仍可访问：已有的词汇本和分享链接里可能还是 basic / core / advanced */
+const LEGACY_EN_LEVELS = new Set(['basic', 'core', 'advanced']);
+
 function assertLevel(language: LexLanguage, levelId: string): void {
-  const exists = lexLevels(language).some((item) => item.id === levelId);
+  const exists =
+    lexLevels(language).some((item) => item.id === levelId) ||
+    (language === 'en' && LEGACY_EN_LEVELS.has(levelId));
   if (!exists) throw new ValidationError(`词库级别 ${levelId} 不存在`);
 }
 
@@ -88,7 +93,10 @@ lexiconRouter.post(
     assertLevel(language as LexLanguage, level);
 
     const entries = listLexEntries(language as LexLanguage, { level });
-    const picked = entries.slice(0, limit ?? entries.length);
+    // 分级词表里没有中文释义的词先不进词汇本：复习卡没有释义等于背了个空壳
+    const ready = entries.filter((entry) => entry.cn.trim().length > 0);
+    const pending = entries.length - ready.length;
+    const picked = ready.slice(0, limit ?? ready.length);
     const added = upsertWords(
       currentUserId(),
       language,
@@ -101,6 +109,7 @@ lexiconRouter.post(
       level,
       added,
       skipped: picked.length - added,
+      pending,
       stats: vocabStats(currentUserId(), language),
       levels: vocabLevelStats(currentUserId(), language),
     });

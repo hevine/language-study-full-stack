@@ -4,7 +4,7 @@
   "script": ["hiragana", "katakana", "kanji"],
   "tokenizer": "kuromoji",
   "syntax": "chunk",
-  "phonology": "mora+pitch",
+  "phonology": "mora",
   "levelScale": { "id": "jlpt", "bands": ["N5", "N4", "N3", "N2", "N1"] },
   "exams": ["jlpt-n5", "jlpt-n4", "jlpt-n3", "jlpt-n2", "jlpt-n1"],
   "scenes": {

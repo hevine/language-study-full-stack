@@ -14,7 +14,9 @@ import SettingsPage from './pages/Settings';
 import Setup from './pages/Setup';
 import TaskPage from './pages/TaskPage';
 import Today from './pages/Today';
+import Loop from './pages/Loop';
 import VocabPage from './pages/Vocab';
+import GrammarPage from './pages/Grammar';
 import Login from './pages/Login';
 import AuthCallback from './pages/AuthCallback';
 
@@ -88,12 +90,16 @@ function AppContent() {
       {/* 以计划为键：切语种后整页重挂载，所有页面按新语种重新取数 */}
       <Suspense fallback={<CenterMessage><div className="hint">正在加载…</div></CenterMessage>}>
       <Routes key={planKey}>
-        <Route path="/" element={plan ? <Dashboard /> : <Navigate to="/setup" replace />} />
+        {/* 首页是 AI 学习台（每天打开的那一屏：今天该做什么 + 把卡住的地方放进来）。
+            整体概览退到 /dashboard，从侧栏进。没有计划时仍先去定目标。 */}
+        <Route path="/" element={plan ? <Navigate to="/studio" replace /> : <Navigate to="/setup" replace />} />
+        <Route path="/dashboard" element={plan ? <Dashboard /> : <Navigate to="/setup" replace />} />
         <Route path="/setup" element={<Setup />} />
         <Route path="/today" element={plan ? <Today /> : <Navigate to="/setup" replace />} />
         {/* 学习台不强制有学习计划：没有计划时也能先把作文贴进来改
             （产物采纳才会要求有今日任务，那一步会明确提示去建计划） */}
         <Route path="/studio" element={<AgentStudio />} />
+        <Route path="/loop" element={<Loop />} />
         <Route
           path="/task/:date/:taskId"
           element={plan ? <TaskPage /> : <Navigate to="/setup" replace />}
@@ -106,6 +112,7 @@ function AppContent() {
         <Route path="/listening" element={<ListeningMaterial />} />
         <Route path="/plan" element={plan ? <PlanPage /> : <Navigate to="/setup" replace />} />
         <Route path="/vocab" element={<VocabPage />} />
+        <Route path="/grammar" element={<GrammarPage />} />
         <Route path="/exams" element={<ExamHub />} />
         <Route path="/exams/:paperId/take" element={<ExamTake />} />
         <Route path="/exams/attempts/:attemptId" element={<ExamResult />} />

@@ -282,7 +282,7 @@ export default function ExamResult() {
         <Link className="btn" to="/exams">
           换一份年份
         </Link>
-        <Link className="btn btn-primary" to="/">
+        <Link className="btn btn-primary" to="/dashboard">
           回到今日概览
         </Link>
       </div>

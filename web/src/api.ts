@@ -23,6 +23,7 @@ import type {
   ExamCalendar,
   ExamSessionsResponse,
   LexiconResponse,
+  GrammarLibraryResponse,
   LlmPoolKey,
   AiGenerateResponse,
   AiStats,
@@ -62,6 +63,8 @@ import type {
 import type {
   AgentAdoptInput,
   AgentAdoptResult,
+  AgentAudio,
+  AgentAudioSource,
   AgentEvent,
   AgentRun,
   AgentRunInput,
@@ -69,6 +72,7 @@ import type {
   AgentScenesResponse,
   ExplainJobState,
 } from './agentTypes';
+import type { LoopArtifact, LoopCard, LoopDocument, LoopStats, LoopToday } from './loopTypes';
 
 const BASE = '/api';
 
@@ -414,10 +418,25 @@ export const api = {
     ),
 
   importLevel: (language: string, level: string) =>
-    request<{ added: number; skipped: number; stats: { total: number; due: number; mastered: number } }>(
+    request<{
+      added: number;
+      skipped: number;
+      /** 来自分级词表、中文释义尚未补齐的词，暂不写入词汇本 */
+      pending: number;
+      stats: { total: number; due: number; mastered: number };
+    }>(
       '/lexicon/import',
       { method: 'POST', body: JSON.stringify({ language, level }) },
     ),
+
+  /** 内置语法库：级别表、语法点、错因规则（可按级别筛选、按关键词搜索） */
+  grammar: (language: string, options?: { level?: string; q?: string }) => {
+    const params = new URLSearchParams();
+    if (options?.level) params.set('level', options.level);
+    if (options?.q) params.set('q', options.q);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<GrammarLibraryResponse>(`/grammar/${language}${suffix}`);
+  },
 
   /** 「换一篇」：清掉当日缓存材料，强制让大模型按当日考纲重新生成 */
   regenerateDay: (date: string, language?: string) =>
@@ -1058,6 +1077,53 @@ export const api = {
     request<{ run: AgentRun }>(`/agent/runs/${encodeURIComponent(runId)}`, {}, 0),
 
   /**
+   * 上传一段录音（网页录制 / 录音笔导出都走这条）。
+   *
+   * 与 /asr 的区别：/asr 是「转完就把字节丢掉」，这里要留住原件 ——
+   * 用户改过转写稿之后还得能回听，发音评分也要读波形。
+   * 只存不转：转写单独一步，失败了能重试而不用重录。
+   */
+  agentAudioUpload: async (
+    audio: Blob,
+    meta: { lang: string; name?: string; durationMs?: number; source?: AgentAudioSource },
+  ): Promise<AgentAudio> => {
+    const query = new URLSearchParams({ lang: meta.lang });
+    if (meta.name) query.set('name', meta.name);
+    if (meta.durationMs && meta.durationMs > 0) query.set('durationMs', String(Math.round(meta.durationMs)));
+    if (meta.source) query.set('source', meta.source);
+
+    const response = await fetchWithAuth(`${BASE}/agent/audio?${query.toString()}`, {
+      method: 'POST',
+      headers: { 'content-type': audio.type || 'application/octet-stream' },
+      body: audio,
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: { message?: string; code?: string } }
+        | null;
+      throw new ApiError(
+        payload?.error?.message ?? `录音上传失败（${response.status}）`,
+        response.status,
+        payload?.error?.code ?? 'AUDIO_UPLOAD_FAILED',
+      );
+    }
+    const data = (await response.json()) as { audio: AgentAudio };
+    return data.audio;
+  },
+
+  /** 转写已上传的录音。失败时音频还在服务端，可以原地重试 */
+  agentAudioTranscribe: (audioId: string, lang: string) =>
+    request<{ audio: AgentAudio; transcript: string; line: string; model: string }>(
+      `/agent/audio/${encodeURIComponent(audioId)}/transcribe`,
+      { method: 'POST', body: JSON.stringify({ lang }) },
+      0,
+    ),
+
+  /** 用户丢掉这段录音时一并清掉磁盘，不留孤儿文件 */
+  agentAudioDelete: (audioId: string) =>
+    request<{ ok: boolean }>(`/agent/audio/${encodeURIComponent(audioId)}`, { method: 'DELETE' }, 0),
+
+  /**
    * 流式跑一次 Agent。
    *
    * 为什么不用 EventSource：它只支持 GET，而 run 的入参（正文、文章 id）放不进 URL，
@@ -1142,4 +1208,113 @@ export const api = {
     request<{ ok: boolean }>(`/explain-videos/jobs/${encodeURIComponent(jobId)}`, {
       method: 'DELETE',
     }, 0),
+
+  // -------------------------------------------------------------------------
+  // 最小学习闭环
+  // -------------------------------------------------------------------------
+
+  /**
+   * 同步跑一次 Agent：闭环页只需要「产物 + runId」，不需要逐字流。
+   * 不重试：这是一次会烧 token 的调用。
+   */
+  agentRunSync: (input: AgentRunInput) =>
+    request<{
+      run: AgentRun | null;
+      clarification: unknown;
+      error: string | null;
+      events: number;
+    }>('/agent/run/sync', { method: 'POST', body: JSON.stringify(input) }, 0),
+
+  loopToday: () => request<LoopToday>('/loop/today', {}, 0),
+
+  loopStats: () => request<LoopStats>('/loop/stats', {}, 0),
+
+  loopDocuments: () => request<{ documents: LoopDocument[] }>('/loop/documents', {}, 0),
+
+  loopArtifacts: () => request<{ artifacts: LoopArtifact[] }>('/loop/artifacts', {}, 0),
+
+  loopCards: (documentId?: string) =>
+    request<{ cards: LoopCard[] }>(
+      `/loop/cards${documentId ? `?documentId=${encodeURIComponent(documentId)}` : ''}`,
+      {},
+      0,
+    ),
+
+  loopGrade: (input: { cardId: string; grade: number; ms: number }) =>
+    request<{ dueDate: string; intervalDays: number; status: string; ease: number }>(
+      '/loop/grade',
+      { method: 'POST', body: JSON.stringify(input) },
+      0,
+    ),
+
+  loopSuspendDocument: (documentId: string) =>
+    request<{ ok: boolean; changed: number }>(
+      `/loop/documents/${encodeURIComponent(documentId)}/suspend`,
+      { method: 'POST' },
+      0,
+    ),
+
+  loopDismissArtifact: (artifactId: string) =>
+    request<{ ok: boolean }>(`/loop/artifacts/${encodeURIComponent(artifactId)}/dismiss`, {
+      method: 'POST',
+    }, 0),
+
+  loopExport: () => request<unknown>('/loop/export', {}, 0),
+
+  // Session API（多任务编排）
+  sessionCreate: (lang: string) =>
+    request<{ sessionId: string }>('/agent/sessions', { method: 'POST', body: JSON.stringify({ lang }) }, 0),
+
+  sessionEnqueue: (sessionId: string, input: {
+    query?: string;
+    text?: string;
+    mode?: string;
+    scene?: string;
+    exam?: string;
+    audioRef?: string;
+  }) =>
+    request<{ taskIds: string[] }>(
+      `/agent/sessions/${encodeURIComponent(sessionId)}/enqueue`,
+      { method: 'POST', body: JSON.stringify(input) },
+      0,
+    ),
+
+  sessionGet: (sessionId: string) =>
+    request<{ tasks: Array<{ id: string; sceneId: string; status: string }> }>(
+      `/agent/sessions/${encodeURIComponent(sessionId)}`,
+      {},
+      0,
+    ),
+
+  /**
+   * Session SSE 流：返回 EventSource-like 的 async generator。
+   * 调用方用 for-await-of 逐事件消费。
+   */
+  sessionRun: (sessionId: string, onEvent: (event: unknown) => void) =>
+    fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    }).then(async (res) => {
+      if (!res.body) return;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          const data = line.replace(/^data:\s*/, '').trim();
+          if (data && data !== '[DONE]') {
+            try {
+              onEvent(JSON.parse(data));
+            } catch {
+              // 忽略解析失败
+            }
+          }
+        }
+      }
+    }),
 };

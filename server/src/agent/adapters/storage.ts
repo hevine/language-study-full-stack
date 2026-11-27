@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type DatabaseType from 'better-sqlite3';
 import { env } from '../../config/env';
 import { logger } from '../../lib/logger';
 import type { LearnerStorePort, TracePort } from '../ports';
@@ -88,7 +89,7 @@ type ErrorEvent =
   | { at: string; lang: string; ruleId: string; op: 'resolve' };
 
 /** 重放事件得到当前错因状态；按语种过滤，跨语种互不污染 */
-function replayErrors(userId: string, lang: LangCode): ErrorRecord[] {
+function replayErrors(userId: string, lang: LangCode, loopDb?: DatabaseType.Database): ErrorRecord[] {
   const file = errorsFile(userId);
   if (!fs.existsSync(file)) return [];
 
@@ -126,14 +127,37 @@ function replayErrors(userId: string, lang: LangCode): ErrorRecord[] {
     map.set(event.ruleId, current);
   }
 
-  return [...map.values()].filter((item) => item.status !== 'resolved').sort((a, b) => b.count - a.count);
+  const result = [...map.values()].filter((item) => item.status !== 'resolved').sort((a, b) => b.count - a.count);
+
+  // 聚合 Loop 复习中的遗忘次数（grade <= 1）
+  if (loopDb) {
+    try {
+      const lapseRows = loopDb
+        .prepare(
+          `SELECT c.rule_id, COUNT(*) AS lapses
+           FROM loop_card_events e
+           JOIN loop_cards c ON c.id = e.card_id
+           WHERE c.user_id = ? AND c.rule_id IS NOT NULL AND e.grade <= 1
+           GROUP BY c.rule_id`,
+        )
+        .all(userId) as Array<{ rule_id: string; lapses: number }>;
+      for (const row of lapseRows) {
+        const record = result.find((item) => item.ruleId === row.rule_id);
+        if (record) record.lapseCount = row.lapses;
+      }
+    } catch {
+      // loop 表可能不存在，忽略
+    }
+  }
+
+  return result;
 }
 
-export function createLearnerStore(): LearnerStorePort {
+export function createLearnerStore(loopDb?: DatabaseType.Database): LearnerStorePort {
   return {
     async read({ userId, lang, topN = 5 }): Promise<LearnerProfile> {
       const stored = readStoredProfile(userId);
-      const errors = replayErrors(userId, lang);
+      const errors = replayErrors(userId, lang, loopDb);
       let daysLeft: number | undefined;
       if (stored.examDate) {
         const diff = Math.ceil((new Date(stored.examDate).getTime() - Date.now()) / 86_400_000);
@@ -171,7 +195,7 @@ export function createLearnerStore(): LearnerStorePort {
       const lines: string[] = [];
       const added: string[] = [];
       const promoted: string[] = [];
-      const before = replayErrors(patch.userId, patch.lang as LangCode);
+      const before = replayErrors(patch.userId, patch.lang as LangCode, loopDb);
 
       for (const op of patch.ops) {
         if (op.op === 'inc') {
@@ -197,7 +221,7 @@ export function createLearnerStore(): LearnerStorePort {
     },
 
     async findError(userId, lang, ruleId) {
-      return replayErrors(userId, lang).find((item) => item.ruleId === ruleId) ?? null;
+      return replayErrors(userId, lang, loopDb).find((item) => item.ruleId === ruleId) ?? null;
     },
   };
 }

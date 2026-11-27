@@ -11,6 +11,7 @@
  * - 等级估算：只给粗糙代理值，接口保持稳定，M1 换成词表覆盖算法。
  */
 import { z } from 'zod';
+import type { ProsodyMeasurement } from '../../domain/speech';
 import type { LlmPort, ErrorTaxonomyPort, LevelScalePort, PhonologyPort, SyntaxPort, TokenizerPort } from '../ports';
 import { SyntaxTreeSchema } from '../protocols';
 import type { LangToken, SyntaxNode } from '../types';
@@ -298,11 +299,141 @@ export const enLevel: LevelScalePort = {
   },
 };
 
-/** 没有音素对齐能力就返回 null —— 教育产品宁缺毋假 */
+// ---------------------------------------------------------------------------
+// 发音 / 节奏评测
+// ---------------------------------------------------------------------------
+
+/**
+ * 这里评的是**节奏**，不是音素准确度。
+ *
+ * 音素级评测（θ 读成 s、重音放错、连读丢了）需要强制对齐或专门的发音模型，
+ * 当前识别线路给不了。能拿到的是时间：每个词/每段几点开始、几点结束。
+ * 由时间能诚实地算出三件事 —— 说得多快、停了几次、停顿有多长 ——
+ * 这三件事恰恰是中国学生口语最明显的短板，所以值得评，但必须标明边界。
+ *
+ * 阈值取自常见口语评分描述（IELTS/TOEFL 的 fluency 档位）：
+ * - 语速：母语者日常 150–190 wpm，考试里 110–165 属于「从容」；
+ * - 停顿：每 100 词 5 次以内算自然换气，再多就是「找词」；
+ * - 连贯：单次停顿 800ms 以内不打断听感。
+ * 这些数字写在这里是为了可审计 —— 换个考试（比如托福更看重 26+ 的流利度）
+ * 应该改这里，而不是散在界面文案里。
+ */
+const PACE_IDEAL_MIN = 110;
+const PACE_IDEAL_MAX = 165;
+const PAUSE_PER_100_WORDS_OK = 5;
+const PAUSE_AVG_OK_MS = 800;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+/** 词期望时长：按字母数估，短词封底 180ms、长词封顶 1.2s，避免虚词被误判 */
+function expectedWordMs(word: string): number {
+  const letters = word.replace(/[^A-Za-z]/g, '').length || 3;
+  return clamp(90 + letters * 55, 180, 1200);
+}
+
+export function scoreProsody(measurement: ProsodyMeasurement): {
+  overall: number;
+  dimensions: Array<{ id: string; score: number; note: string }>;
+  wordLevel: Array<{ word: string; score: number; hint?: string }>;
+} {
+  const { wpm, articulationWpm, pauseCount, longestPauseMs, speechRatio, wordCount, pauses } = measurement;
+
+  // --- 语速 ---
+  let pace: number;
+  if (wpm < PACE_IDEAL_MIN) pace = 100 - (PACE_IDEAL_MIN - wpm) * 1.2;
+  else if (wpm > PACE_IDEAL_MAX) pace = 100 - (wpm - PACE_IDEAL_MAX) * 1.0;
+  else pace = 100;
+  pace = clamp(Math.round(pace), 30, 100);
+
+  const paceNote =
+    wpm < PACE_IDEAL_MIN
+      ? `实测 ${wpm} 词/分钟，偏慢。慢通常不是嘴慢，是边想边说 —— 先把要说的三点写下来再开口，速度会自然上来。`
+      : wpm > PACE_IDEAL_MAX
+        ? `实测 ${wpm} 词/分钟，偏快。去掉停顿后 ${articulationWpm}，说明是抢着说完而不是从容展开。`
+        : `实测 ${wpm} 词/分钟（去掉停顿 ${articulationWpm}），在从容区间（${PACE_IDEAL_MIN}–${PACE_IDEAL_MAX}）。`;
+
+  // --- 停顿 ---
+  // 不用「每 100 词几次」直接扣分：10 个词里停 1 次会被算成 10 次/100 词，
+  // 但那只是一次换气。改成跟「这个长度本该有几次」比，短样本才不会被冤枉。
+  const expectedPauses = Math.max(0.5, (wordCount / 100) * PAUSE_PER_100_WORDS_OK);
+  const pauseRatio = pauseCount / expectedPauses;
+  let pausing = pauseRatio <= 1 ? 100 : pauseRatio <= 3 ? 100 - (pauseRatio - 1) * 20 : 60 - (pauseRatio - 3) * 10;
+  if (longestPauseMs > 1500) pausing -= Math.min(15, (longestPauseMs - 1500) / 300);
+  pausing = clamp(Math.round(pausing), 25, 100);
+
+  const longestText = longestPauseMs >= 1000 ? `${(longestPauseMs / 1000).toFixed(1)} 秒` : `${longestPauseMs} 毫秒`;
+  const per100 = wordCount > 0 ? (pauseCount / wordCount) * 100 : 0;
+  // 样本太短时「每 100 词」是外推出来的，写出来会误导（10 个词停 1 次 ≠ 每 100 词停 10 次）
+  const density = wordCount >= 20 ? `每 100 词 ${per100.toFixed(1)} 次` : '这段太短，不换算密度';
+  // 建议只在样本够长、停顿确实偏多时才给：10 个词里停一次，谈不上「要找词」。
+  // 判据与分数同源（都用 pauseRatio），否则会出现「95 分 + 你停顿偏多」这种自相矛盾。
+  const needsAdvice = wordCount >= 20 && pauseRatio >= 2;
+  const pausingNote =
+    pauseCount === 0
+      ? '这段没有出现 ≥350ms 的停顿 —— 要么一气说完，要么录音里没测到明显的换气。'
+      : `一共停了 ${pauseCount} 次（${density}），最长一次 ${longestText}，` +
+        `发声占 ${(speechRatio * 100).toFixed(0)}%。${
+          needsAdvice
+            ? '停顿偏多，多半是在找词：把常用连接词（well / I mean / the thing is）练成条件反射，能把这些停顿填掉。'
+            : pauseRatio > 1
+              ? '停顿次数略高于这个长度的常见值，还不算卡壳。'
+              : '停顿频率正常。'
+        }`;
+
+  // --- 连贯 ---
+  const avgPause = pauses.length > 0 ? pauses.reduce((sum, item) => sum + (item.endMs - item.startMs), 0) / pauses.length : 0;
+  let continuity = 100 - Math.max(0, avgPause - PAUSE_AVG_OK_MS) / 25;
+  if (measurement.leadInMs > 2000) continuity -= 10;
+  continuity = clamp(Math.round(continuity), 30, 100);
+
+  const continuityNote =
+    pauses.length === 0
+      ? '句与句之间没有长停顿，听感是连贯的。'
+      : `平均每次停顿 ${Math.round(avgPause)}ms${
+          avgPause > PAUSE_AVG_OK_MS ? '，超过 800ms 后听者会以为你说完了' : '，不打断听感'
+        }${measurement.leadInMs > 2000 ? `；开口前还空了 ${(measurement.leadInMs / 1000).toFixed(1)} 秒` : ''}。`;
+
+  // --- 慢词：只有词级时间戳才做得了 ---
+  const wordLevel: Array<{ word: string; score: number; hint?: string }> = [];
+  for (const item of measurement.words ?? []) {
+    const actual = item.endMs - item.startMs;
+    const expected = expectedWordMs(item.word);
+    if (actual < 550 || actual < expected * 2.2) continue;
+    wordLevel.push({
+      word: item.word,
+      score: clamp(Math.round((expected / actual) * 100), 25, 95),
+      hint: `念了 ${(actual / 1000).toFixed(2)} 秒，约是同长度词的 ${(actual / expected).toFixed(1)} 倍 —— 多半是在这个词上卡了一下，不是发音错`,
+    });
+  }
+  wordLevel.sort((a, b) => a.score - b.score);
+
+  const overall = Math.round(pace * 0.4 + pausing * 0.35 + continuity * 0.25);
+
+  return {
+    overall: clamp(overall, 0, 100),
+    dimensions: [
+      { id: 'pace', score: pace, note: paceNote },
+      { id: 'pausing', score: pausing, note: pausingNote },
+      { id: 'continuity', score: continuity, note: continuityNote },
+    ],
+    wordLevel: wordLevel.slice(0, 6),
+  };
+}
+
+/**
+ * 没有音频对齐能力就返回 null —— 教育产品宁缺毋假。
+ * 现在有了时间戳才开始评，评的是节奏；音素准确度仍然不评。
+ */
 export const enPhonology: PhonologyPort = {
   lang: 'en',
-  async score() {
-    return null;
+  async score(input) {
+    const measurement = input.measurement;
+    if (!measurement) return null;
+    // 少于 8 个词，语速与停顿密度都不可靠 —— 与其给个 30 分吓人，不如说「太短，测不出」
+    if (measurement.wordCount < 8 || measurement.durationMs < 2000) return null;
+    return scoreProsody(measurement);
   },
 };
 

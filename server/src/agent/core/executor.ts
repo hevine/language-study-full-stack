@@ -36,6 +36,8 @@ const LLM_TIMEOUT_MS = env.llm.timeoutMs * 2 + 15_000;
 
 function timeoutFor(tool: ToolDef, override?: number): number {
   if (override) return override;
+  // 工具自己申报的上限优先：录音转写这类「不花 token 但耗时不定」的工具只能自己说了算
+  if (tool.timeoutMs) return tool.timeoutMs;
   // 声明了 token 成本 = 它要调模型；这类工具让位给 LLM 层超时
   return (tool.cost.tokens ?? 0) > 0 ? LLM_TIMEOUT_MS : LOCAL_TIMEOUT_MS;
 }

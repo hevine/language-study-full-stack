@@ -24,8 +24,10 @@ export function createLlmPort(): LlmPort {
         {
           temperature: req.temperature ?? 0.4,
           maxTokens: req.maxTokens ?? 2000,
-          // 交互路径默认不想：思维链在这类结构化任务上换不来质量，只换来几十秒
-          thinking: req.thinking ?? 'off',
+          // Agent 的每一步都挡在用户面前等，默认走低延迟交互档：
+          // 排除视觉专用线路、关闭思维链、思考不可关的线路垫后
+          profile: req.profile ?? 'interactive',
+          thinking: req.thinking,
         },
       );
       return { data, tokens: config.usage?.totalTokens ?? 0 };
@@ -42,7 +44,12 @@ export function createLlmPort(): LlmPort {
           { role: 'system', content: req.system },
           { role: 'user', content: req.user },
         ],
-        { temperature: 0.5, maxTokens: req.maxTokens ?? 1200, thinking: req.thinking ?? 'off' },
+        {
+          temperature: 0.5,
+          maxTokens: req.maxTokens ?? 1200,
+          profile: req.profile ?? 'interactive',
+          thinking: req.thinking,
+        },
       );
       return { text, tokens: config.usage?.totalTokens ?? 0 };
     },

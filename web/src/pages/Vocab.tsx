@@ -17,6 +17,11 @@ const GRADES = [
 type Mode = 'review' | 'all' | 'library';
 
 const LEVEL_LABEL: Record<string, string> = {
+  L1: 'L1 基础',
+  L2: 'L2 核心',
+  L3: 'L3 进阶',
+  L4: 'L4 学术',
+  L5: 'L5 高难',
   basic: '过渡词',
   core: '核心',
   advanced: '拉分',
@@ -39,8 +44,8 @@ const LANG_COPY = {
     eyebrow: 'Vocabulary · 间隔重复',
     searchAll: '搜索词或释义',
     searchLib: '查词、释义或主题',
-    libTitle: '托福分级词库（过渡 / 核心 / 拉分）',
-    emptyHint: '去「分级词库」把过渡词整级加入，或完成今天的英语精读任务。',
+    libTitle: '托福分级词库（L1–L5 · 1600 词）',
+    emptyHint: '去「分级词库」把 L1–L5 任一级整级加入，或完成今天的英语精读任务。',
     reviewTip: '英语词条注意音标重音，托福听力里听不出的词，多半是重音位置记错了。',
   },
   ja: {
@@ -189,8 +194,10 @@ export default function VocabPage() {
       const result = await api.importLevel(language, levelId);
       setNotice(
         result.added > 0
-          ? `已把 ${result.added} 个新词加入${copy.name}词汇本${result.skipped > 0 ? `，${result.skipped} 个原本就在册中` : ''}。`
-          : '这一级的词已经全部在词汇本里了。',
+          ? `已把 ${result.added} 个新词加入${copy.name}词汇本${result.skipped > 0 ? `，${result.skipped} 个原本就在册中` : ''}${result.pending > 0 ? `；另有 ${result.pending} 个词释义待补，暂未加入` : ''}。`
+          : result.pending > 0
+            ? `这一级有 ${result.pending} 个词的释义待补，暂未加入词汇本。`
+            : '这一级的词已经全部在词汇本里了。',
       );
       const refreshed = await api.lexicon(language, lexLevel ?? levelId, lexQuery || undefined);
       setLex(refreshed);
@@ -320,7 +327,7 @@ export default function VocabPage() {
                         <span className="chip chip-teal">已复习 {current.reps} 次</span>
                         <span className="chip">间隔 {current.intervalDays} 天</span>
                       </div>
-                      <div style={{ fontSize: 17, marginTop: 12 }}>{current.meaning}</div>
+                      <div style={{ fontSize: 17, marginTop: 12 }}>{current.meaning || '释义待补'}</div>
                       {current.mnemonic ? (
                         <div className="mnemonic" style={{ marginTop: 10 }}>
                           <span className="mnemonic-label">记忆法</span>
@@ -530,16 +537,22 @@ export default function VocabPage() {
                         {word.reading ? <span className="lib-kana">{word.reading}</span> : null}
                         <span className="chip chip-accent">{LEVEL_LABEL[word.level] ?? word.level}</span>
                         <span className="chip">{word.pos}</span>
+                        {word.band ? <span className="chip">{word.band}</span> : null}
                       </div>
-                      <div className="lib-cn">{word.cn}</div>
-                      <div className="lib-example">
-                        {word.example}
-                        {word.exampleCn ? <span>　{word.exampleCn}</span> : null}
-                      </div>
-                      <div className="lib-mnemonic">{word.mnemonic}</div>
+                      {word.forms ? <div className="hint">变形：{word.forms}</div> : null}
+                      <div className="lib-cn">{word.cn || '释义待补'}</div>
+                      {word.relations ? <div className="hint">{word.relations}</div> : null}
+                      {word.example ? (
+                        <div className="lib-example">
+                          {word.example}
+                          {word.exampleCn ? <span>　{word.exampleCn}</span> : null}
+                        </div>
+                      ) : null}
+                      {word.mnemonic ? <div className="lib-mnemonic">{word.mnemonic}</div> : null}
                     </div>
                     <div className="lib-word-side">
                       <span className="chip">{word.theme}</span>
+                      {word.code ? <span className="hint">{word.code}</span> : null}
                       <span className={`chip ${word.inBook ? 'chip-ok' : ''}`}>
                         {word.inBook ? '已在册' : '未收录'}
                       </span>

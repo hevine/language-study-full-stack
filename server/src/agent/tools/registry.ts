@@ -46,6 +46,13 @@ export interface ToolDef {
   /** 幂等工具可以缓存、可以断点续跑 */
   idempotent: boolean;
   args: ZodTypeAny;
+  /**
+   * 单步超时覆盖（毫秒）。
+   * 默认按「有没有花 token」猜耗时，但有些工具不花 token 却慢得不可预测 ——
+   * 录音转写就是典型：9 秒录音 0.4 秒回来，5 分钟的录音笔文件可能几十秒。
+   * 这类工具自己申报上限，比让内核猜准。
+   */
+  timeoutMs?: number;
   run(args: unknown, ctx: ToolContext): Promise<ToolOutcome>;
 }
 
@@ -59,6 +66,7 @@ export function defineTool<S extends ZodTypeAny>(spec: {
   cost: ToolCost;
   idempotent: boolean;
   args: S;
+  timeoutMs?: number;
   run(args: z.infer<S>, ctx: ToolContext): Promise<ToolOutcome>;
 }): ToolDef {
   return {
@@ -67,6 +75,7 @@ export function defineTool<S extends ZodTypeAny>(spec: {
     cost: spec.cost,
     idempotent: spec.idempotent,
     args: spec.args,
+    timeoutMs: spec.timeoutMs,
     run: (args, ctx) => spec.run(spec.args.parse(args) as z.infer<S>, ctx),
   };
 }

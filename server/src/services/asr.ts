@@ -30,12 +30,25 @@ import {
   type AsrFailureInfo,
 } from './asrPool';
 import { ensureLocalAsr, isLoopbackUrl } from './localAsr';
+import { hasTranscriptContent, sanitizeTranscript, type TranscriptLang } from '../lib/transcript';
 
 /** ISO 639-1 + 引导 prompt：让多语言模型按目标语种输出，而不是跟着口音跑偏 */
 const LANGUAGE_HINT: Record<Language, { iso: string; prompt: string }> = {
-  en: { iso: 'en', prompt: 'Transcribe this English language practice recording. Output English text only.' },
-  ja: { iso: 'ja', prompt: 'この日本語学習の録音を文字起こししてください。日本語のテキストのみを出力してください。' },
-  ko: { iso: 'ko', prompt: '이 한국어 학습 녹음을 전사해 주세요. 한국어 텍스트만 출력하세요.' },
+  en: {
+    iso: 'en',
+    prompt:
+      'Transcribe this English language practice recording. Output English text only. Do not output emoji, emoticons, or emotion tags.',
+  },
+  ja: {
+    iso: 'ja',
+    prompt:
+      'この日本語学習の録音を文字起こししてください。日本語のテキストのみを出力してください。絵文字・顔文字・感情タグは出力しないでください。',
+  },
+  ko: {
+    iso: 'ko',
+    prompt:
+      '이 한국어 학습 녹음을 전사해 주세요. 한국어 텍스트만 출력하세요. 이모지나 감정 태그는 출력하지 마세요.',
+  },
 };
 
 export interface AsrSettingsView {
@@ -87,10 +100,18 @@ export interface TranscribeResult {
   source: AsrSettingsView['source'];
   /** 实际命中并能出声的那条线路名，便于界面提示 */
   line: string;
+  /** 词级时间戳（秒 → 毫秒）；线路支持才有，不支持时为 undefined，绝不补零凑数 */
+  words?: Array<{ word: string; startMs: number; endMs: number }>;
+  segments?: Array<{ text: string; startMs: number; endMs: number }>;
+  /** 上游报的音频时长；识别线路给得比浏览器准 */
+  durationMs?: number;
 }
 
 interface AsrCallResult {
   text: string;
+  words?: Array<{ word: string; startMs: number; endMs: number }>;
+  segments?: Array<{ text: string; startMs: number; endMs: number }>;
+  durationMs?: number;
 }
 
 interface AsrCallFailure {
@@ -99,6 +120,21 @@ interface AsrCallFailure {
   timeout: boolean;
   network: boolean;
   empty: boolean;
+  /** 线路不认 verbose_json / timestamp_granularities，换普通 json 再来一次即可 */
+  unsupportedFormat?: boolean;
+}
+
+/**
+ * 哪些线路不支持 verbose_json：负缓存。
+ *
+ * 硅基流动的 SenseVoiceSmall 只认 json，每次都先试 verbose_json 再回退
+ * 等于给每段录音白加一次往返 —— 口语场景本来就要等两秒，这一下能省一半。
+ * key 用 baseUrl+model：换线路就不再走旧结论。
+ */
+const NO_VERBOSE = new Set<string>();
+
+function lineKey(candidate: AsrCandidate): string {
+  return `${candidate.baseUrl.replace(/\/+$/, '')}|${candidate.model}`;
 }
 
 /** 单条线路调用；成功返回文本，失败抛 AsrCallFailure（统一结构，便于号池分类） */
@@ -107,6 +143,7 @@ async function postTranscription(
   audio: Buffer | null,
   fileName: string,
   hint: { iso: string; prompt: string },
+  opts: { verbose?: boolean } = {},
 ): Promise<AsrCallResult> {
   const form = new FormData();
   const bytes = audio ? new Uint8Array(audio) : new Uint8Array(makeTestWav());
@@ -114,7 +151,11 @@ async function postTranscription(
   form.append('model', candidate.model);
   form.append('language', hint.iso);
   form.append('prompt', hint.prompt);
-  form.append('response_format', 'json');
+  form.append('response_format', opts.verbose ? 'verbose_json' : 'json');
+  if (opts.verbose) {
+    // OpenAI 系的写法；不认识的实现通常会忽略未知字段，真报错则回退 json
+    form.append('timestamp_granularities[]', 'word');
+  }
   form.append('temperature', '0');
 
   const controller = new AbortController();
@@ -133,21 +174,39 @@ async function postTranscription(
         timeout: false,
         network: false,
         empty: false,
+        // 4xx 大概率是参数不被接受；真正鉴权错误也会是 4xx，但回退一次 json 不影响判定
+        unsupportedFormat: Boolean(opts.verbose) && response.status >= 400 && response.status < 500,
       } as AsrCallFailure;
     }
     const raw = await response.text();
     let text = '';
+    let words: AsrCallResult['words'];
+    let segments: AsrCallResult['segments'];
+    let durationMs: number | undefined;
     try {
-      const parsed = JSON.parse(raw) as { text?: unknown };
+      const parsed = JSON.parse(raw) as {
+        text?: unknown;
+        words?: unknown;
+        segments?: unknown;
+        duration?: unknown;
+      };
       text = typeof parsed.text === 'string' ? parsed.text : '';
+      const lang = hint.iso as TranscriptLang;
+      words = parseWords(parsed.words, lang);
+      segments = parseSegments(parsed.segments, lang);
+      if (typeof parsed.duration === 'number' && parsed.duration > 0) {
+        durationMs = Math.round(parsed.duration * 1000);
+      }
     } catch {
       text = raw.trim();
     }
-    text = text.trim();
-    if (!text) {
+    // SenseVoice 系会把 😌 这类情感表情和 <|HAPPY|> 标签写进正文：出口统一清掉，
+    // 清完只剩标点也按「没识别出内容」处理，交给号池换下一条线路。
+    text = sanitizeTranscript(text, hint.iso as TranscriptLang);
+    if (!text || !hasTranscriptContent(text)) {
       throw { status: response.status, snippet: '', timeout: false, network: false, empty: true } as AsrCallFailure;
     }
-    return { text };
+    return { text, words, segments, durationMs };
   } catch (err) {
     if (isCallFailure(err)) throw err;
     const timeout = (err as Error)?.name === 'AbortError';
@@ -163,6 +222,47 @@ async function postTranscription(
   }
 }
 
+/** 上游时间戳是**秒**（浮点）；负值或逆序一律丢弃，宁可没有也不给错的数据 */
+function parseWords(value: unknown, lang: TranscriptLang): AsrCallResult['words'] {
+  if (!Array.isArray(value)) return undefined;
+  const out: NonNullable<AsrCallResult['words']> = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as { word?: unknown; start?: unknown; end?: unknown };
+    if (typeof row.word !== 'string' || !row.word.trim()) continue;
+    const start = Number(row.start);
+    const end = Number(row.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start) continue;
+    // 词里也可能挂着 emoji；清完为空说明这个词本身就是模型标注，直接丢掉
+    const word = sanitizeTranscript(row.word, lang);
+    if (!word) continue;
+    out.push({
+      word,
+      startMs: Math.round(start * 1000),
+      endMs: Math.round(end * 1000),
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function parseSegments(value: unknown, lang: TranscriptLang): AsrCallResult['segments'] {
+  if (!Array.isArray(value)) return undefined;
+  const out: NonNullable<AsrCallResult['segments']> = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as { text?: unknown; start?: unknown; end?: unknown };
+    const start = Number(row.start);
+    const end = Number(row.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start) continue;
+    out.push({
+      text: typeof row.text === 'string' ? sanitizeTranscript(row.text, lang) : '',
+      startMs: Math.round(start * 1000),
+      endMs: Math.round(end * 1000),
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 function isCallFailure(err: unknown): err is AsrCallFailure {
   return Boolean(err) && typeof err === 'object' && 'network' in (err as object) && 'empty' in (err as object);
 }
@@ -170,11 +270,15 @@ function isCallFailure(err: unknown): err is AsrCallFailure {
 /**
  * 把录音字节转成目标语言文本：遍历号池，第一条成功即返回；
  * 失败的线路记录原因并挂冷却，全部失败才把聚合错误抛给用户。
+ *
+ * withTiming 只在口语评测里开：它要额外地请求词级时间戳。
+ * 拿不到时间戳不算失败 —— 文本已经拿到了，节奏可以退到声学检测去测。
  */
 export async function transcribeAudio(
   audio: Buffer,
   language: Language,
   fileName = 'recording.webm',
+  opts: { withTiming?: boolean } = {},
 ): Promise<TranscribeResult> {
   const candidates = asrPoolCandidates();
   if (candidates.length === 0) {
@@ -198,7 +302,15 @@ export async function transcribeAudio(
         logger.warn('本地 ASR 兜底未就绪', { line: candidate.label });
         continue;
       }
-      const result = await postTranscription(candidate, audio, fileName, hint);
+
+      const result = await postTranscription(candidate, audio, fileName, hint, {
+        verbose: Boolean(opts.withTiming) && !NO_VERBOSE.has(lineKey(candidate)),
+      });
+      if (opts.withTiming && !result.words && !result.segments && !NO_VERBOSE.has(lineKey(candidate))) {
+        // 通了但没给时间戳：说明这条实现不返时间戳，记下来别再问
+        NO_VERBOSE.add(lineKey(candidate));
+      }
+
       markAsrSuccess(candidate.keyId);
       logger.info('asr transcribed', {
         language,
@@ -207,6 +319,8 @@ export async function transcribeAudio(
         model: candidate.model,
         bytes: audio.length,
         chars: result.text.length,
+        words: result.words?.length ?? 0,
+        segments: result.segments?.length ?? 0,
       });
       return {
         text: result.text,
@@ -214,9 +328,34 @@ export async function transcribeAudio(
         model: candidate.model,
         source: candidate.source === 'env' ? 'env' : 'pool',
         line: candidate.label,
+        words: result.words,
+        segments: result.segments,
+        durationMs: result.durationMs,
       };
     } catch (err) {
       const failure = err as AsrCallFailure;
+      if (failure.unsupportedFormat) {
+        // 这条线路不认 verbose_json：标记后原地重试一次普通 json，别切线路
+        NO_VERBOSE.add(lineKey(candidate));
+        logger.info('asr line 不支持 verbose_json，回退普通 json', { line: candidate.label });
+        try {
+          const result = await postTranscription(candidate, audio, fileName, hint);
+          markAsrSuccess(candidate.keyId);
+          return {
+            text: result.text,
+            language,
+            model: candidate.model,
+            source: candidate.source === 'env' ? 'env' : 'pool',
+            line: candidate.label,
+          };
+        } catch (retryErr) {
+          const retryFailure = retryErr as AsrCallFailure;
+          if (!retryFailure.empty) {
+            failures.push(`${candidate.label}：回退 json 后仍失败（${retryFailure.status || '网络'}）`);
+          }
+          continue;
+        }
+      }
       if (failure.empty) {
         // 线路连通、只是这段录音没有可识别内容：不算线路故障，换下一条试试
         sawEmpty = true;

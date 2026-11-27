@@ -72,11 +72,11 @@ export default function RunTimeline({
           <span />
           <span />
         </div>
-        <p className="run-empty-title">左侧写下你的问题，这里会显示它怎么动手</p>
+        <p className="run-empty-title">上面写下你的问题，这里会显示它怎么动手</p>
         <ul className="run-empty-list">
           <li>先路由到具体场景，再排出要调用哪几步</li>
           <li>每一步都带耗时与依据，不用盲等</li>
-          <li>结束后过五道校验关，右侧才出产物</li>
+          <li>结束后过五道校验关，下方才出产物</li>
         </ul>
       </div>
     );

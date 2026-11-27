@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { env } from '../config/env';
 import { agentRouter } from '../agent/routes';
+import { loopRouter } from '../loop/routes';
 import { enforceAuth, optionalAuthenticate } from '../middleware/auth';
 import { authRouter } from './auth';
 import { aiRouter } from './ai';
@@ -10,9 +11,11 @@ import { examCalendarRouter } from './examCalendar';
 import { examImportsRouter } from './examImports';
 import { examSessionsRouter } from './examSessions';
 import { examsRouter } from './exams';
+import { grammarRouter } from './grammar';
 import { daysRouter } from './days';
 import { explainVideosRouter } from './explainVideos';
 import { lexiconRouter } from './lexicon';
+import { knowledgeRouter } from './knowledge';
 import { listeningRouter } from './listening';
 import { materialsRouter } from './materials';
 import { pathsRouter } from './paths';
@@ -50,6 +53,8 @@ apiRouter.use(practiceRouter);
 apiRouter.use(vocabRouter);
 apiRouter.use(voicesRouter);
 apiRouter.use(lexiconRouter);
+apiRouter.use(grammarRouter);
+apiRouter.use(knowledgeRouter);
 apiRouter.use(materialsRouter);
 apiRouter.use(listeningRouter);
 apiRouter.use(statsRouter);
@@ -57,3 +62,5 @@ apiRouter.use(settingsRouter);
 
 // Lingua Agent：同进程挂载，前缀独立（将来整体拆分只改反代）
 apiRouter.use(agentRouter);
+// 最小学习闭环：卡片、到期队列、评分与统计
+apiRouter.use(loopRouter);

@@ -1,0 +1,352 @@
+[
+  {
+    "code": "EN-V-0842",
+    "cn": "遵守；服从",
+    "mnemonic": "com(共同)+ply(弯折)+ance→都弯身顺从，「遵守」法规；与动词 comply 同源。",
+    "example": "Strict compliance with safety regulations is required in the laboratory.",
+    "exampleCn": "实验室必须严格遵守安全规定。"
+  },
+  {
+    "code": "EN-V-0843",
+    "cn": "并发症；复杂化",
+    "mnemonic": "com(一起)+plic(折叠)+ation→事情纠缠折叠在一起，「并发症；复杂情况」。",
+    "example": "The surgery went well, but a minor complication arose during recovery.",
+    "exampleCn": "手术很顺利，但恢复期间出现了一个小并发症。"
+  },
+  {
+    "code": "EN-V-0844",
+    "cn": "作品；构成；作曲",
+    "mnemonic": "com(共同)+pos(放置)+ition→把元素放到一起，「构成」一首「作品」。",
+    "example": "The orchestra performed a new composition by a young composer.",
+    "exampleCn": "管弦乐队演奏了一位年轻作曲家的新作品。"
+  },
+  {
+    "code": "EN-V-0845",
+    "cn": "化合物；复合的",
+    "mnemonic": "com(共同)+pound(放置)→把多种元素放在一起，「化合物」。",
+    "example": "Water is a simple compound made of hydrogen and oxygen.",
+    "exampleCn": "水是由氢和氧构成的简单化合物。"
+  },
+  {
+    "code": "EN-V-0846",
+    "cn": "理解；理解力",
+    "mnemonic": "com(完全)+prehend(抓住)+sion→完全抓住意思，「理解」；comprehensive 则是全面的。",
+    "example": "Reading comprehension improves when students encounter varied texts.",
+    "exampleCn": "学生接触多样的文本时，阅读理解能力会提高。"
+  },
+  {
+    "code": "EN-V-0847",
+    "cn": "妥协；折中",
+    "mnemonic": "com(共同)+promise(承诺)→双方各让一步共同许诺，「妥协」。",
+    "example": "After hours of debate, the two sides finally reached a compromise.",
+    "exampleCn": "经过数小时辩论，双方最终达成妥协。"
+  },
+  {
+    "code": "EN-V-0850",
+    "cn": "概念；构想",
+    "mnemonic": "con(共同)+cept(抓取)+ion→心里抓住的想法，「概念」；与 concept 同源。",
+    "example": "Ancient astronomers had a different conception of the universe.",
+    "exampleCn": "古代天文学家对宇宙有着不同的概念。"
+  },
+  {
+    "code": "EN-V-0851",
+    "cn": "让步；特许",
+    "mnemonic": "con+cess(行走)+ion→退让一步走开，「让步」；动词为 concede。",
+    "example": "The union won several concessions from the management after the strike.",
+    "exampleCn": "罢工后工会从资方赢得了几项让步。"
+  },
+  {
+    "code": "EN-V-0852",
+    "cn": "具体的；混凝土",
+    "mnemonic": "con(共同)+cret(生长)+e→凝成一体即「混凝土」，引申「具体可触」，反 abstract。",
+    "example": "Workers poured concrete into the foundation before raising the walls.",
+    "exampleCn": "工人先向地基浇筑混凝土，然后才砌墙。"
+  },
+  {
+    "code": "EN-V-0853",
+    "cn": "谴责；判刑",
+    "mnemonic": "con+demn(谴责，同 damn)→强烈「谴责」，法律上引申「判刑」。",
+    "example": "The court condemned the defendant to ten years in prison.",
+    "exampleCn": "法院判处被告十年监禁。"
+  },
+  {
+    "code": "EN-V-0854",
+    "cn": "凝结；冷凝",
+    "mnemonic": "con(共同)+dens(浓密)+ation→变浓密而凝成液体，「凝结」。",
+    "example": "Condensation formed on the cold window glass on a humid morning.",
+    "exampleCn": "潮湿的早晨，冷凝水在冰冷的窗玻璃上形成。"
+  },
+  {
+    "code": "EN-V-0855",
+    "cn": "压缩；冷凝；精简",
+    "mnemonic": "con(共同)+dens(浓密)+e→使浓密「压缩」，气体变液体即「冷凝」。",
+    "example": "The vapor condensed into droplets when it touched the cool surface.",
+    "exampleCn": "水蒸气接触到凉爽的表面后凝结成小水滴。"
+  },
+  {
+    "code": "EN-V-0856",
+    "cn": "配置；结构；布局",
+    "mnemonic": "con+figur(形状，同 figure)+ation→整体的形状布局即「配置」。",
+    "example": "The technician tested several configurations before choosing the fastest one.",
+    "exampleCn": "技术员测试了几种配置后才选出最快的一种。"
+  },
+  {
+    "code": "EN-V-0858",
+    "cn": "对抗；对峙",
+    "mnemonic": "con(共同)+front(前面)+ation→正面相对，「对抗」；动词 confront。",
+    "example": "The protest nearly turned into a violent confrontation with the police.",
+    "exampleCn": "抗议差点演变成与警方的暴力对峙。"
+  },
+  {
+    "code": "EN-V-0859",
+    "cn": "困惑；混乱",
+    "mnemonic": "con+fuse(倾倒/熔化)+ion→搅成一团，「困惑混乱」；动词 confuse。",
+    "example": "The contradictory instructions caused considerable confusion among the students.",
+    "exampleCn": "自相矛盾的指示在学生中造成了相当的困惑。"
+  },
+  {
+    "code": "EN-V-0860",
+    "cn": "连词；结合",
+    "mnemonic": "con(共同)+junct(连接)+ion→把词连起来的「连词」，也指「结合」。",
+    "example": "Words like 'and' and 'but' are common conjunctions in English.",
+    "exampleCn": "像 and 和 but 这样的词是英语中常见的连词。"
+  },
+  {
+    "code": "EN-V-0861",
+    "cn": "一致性；连贯性",
+    "mnemonic": "con+sist(站立)+ency→始终站得住脚，「一致性」；反 inconsistency。",
+    "example": "The data showed remarkable consistency across the three experiments.",
+    "exampleCn": "数据在三次实验中显示出显著的一致性。"
+  },
+  {
+    "code": "EN-V-0863",
+    "cn": "选民；组成部分",
+    "mnemonic": "con+stitu(建立，同 statute)+ent→构成整体的成员，政治中指「选民」。",
+    "example": "The senator met with constituents to hear their concerns about the policy.",
+    "exampleCn": "参议员与选民会面，听取他们对政策的关切。"
+  },
+  {
+    "code": "EN-V-0864",
+    "cn": "消费；消耗",
+    "mnemonic": "con+sum(花费)+ption→把钱花掉，「消费」；动词 consume。",
+    "example": "Energy consumption has risen sharply in industrialized countries.",
+    "exampleCn": "工业化国家的能源消耗急剧上升。"
+  },
+  {
+    "code": "EN-V-0865",
+    "cn": "污染；沾染",
+    "mnemonic": "con+tamin(接触)+ation→接触了脏东西，「污染」；动词 contaminate。",
+    "example": "The spill caused serious contamination of the nearby river.",
+    "exampleCn": "泄漏造成附近河流的严重污染。"
+  },
+  {
+    "code": "EN-V-0868",
+    "cn": "矛盾；反驳",
+    "mnemonic": "contra(相反)+dict(说)+ion→说出相反的话，「矛盾」；动词 contradict。",
+    "example": "The witness's testimony contained several contradictions.",
+    "exampleCn": "证人的证词里有几处矛盾。"
+  },
+  {
+    "code": "EN-V-0869",
+    "cn": "转化；转换",
+    "mnemonic": "con+vers(转)+ion→转变形态，「转化」；动词 convert。",
+    "example": "The conversion of solar energy into electricity is becoming more efficient.",
+    "exampleCn": "太阳能转化为电能的效率正变得越来越高。"
+  },
+  {
+    "code": "EN-V-0870",
+    "cn": "定罪；信念",
+    "mnemonic": "con+vict(征服)+ion→被判有罪即「定罪」，也可指内心「坚信」。",
+    "example": "The judge overturned the conviction due to lack of evidence.",
+    "exampleCn": "由于证据不足，法官撤销了定罪。"
+  },
+  {
+    "code": "EN-V-0871",
+    "cn": "合作的；配合的",
+    "mnemonic": "co(共同)+oper(工作)+ative→一起工作，「合作的」；反 uncooperative。",
+    "example": "The students were cooperative during the group project.",
+    "exampleCn": "学生们在小组项目中很合作。"
+  },
+  {
+    "code": "EN-V-0872",
+    "cn": "铜；铜制的",
+    "mnemonic": "一种红棕色金属「铜」，元素符号 Cu，导电性极佳。",
+    "example": "Copper is widely used in electrical wiring because it conducts well.",
+    "exampleCn": "铜因导电性好而被广泛用于电线。"
+  },
+  {
+    "code": "EN-V-0873",
+    "cn": "相关性；关联",
+    "mnemonic": "cor(共同)+relat(联系)+ion→两者一起变化，「相关性」。",
+    "example": "Researchers found a strong correlation between smoking and lung disease.",
+    "exampleCn": "研究人员发现吸烟与肺病之间有很强的相关性。"
+  },
+  {
+    "code": "EN-V-0874",
+    "cn": "通信；对应",
+    "mnemonic": "cor(共同)+respond(回应)+ence→互相回应，「通信；对应」。",
+    "example": "The scholar kept up a long correspondence with colleagues abroad.",
+    "exampleCn": "这位学者与国外的同事保持着长期的通信。"
+  },
+  {
+    "code": "EN-V-0876",
+    "cn": "耕种；培养",
+    "mnemonic": "cult(耕种，同 culture)+ivation→耕作土地，「耕种」，引申「培养」。",
+    "example": "Crop cultivation has shaped the landscape for thousands of years.",
+    "exampleCn": "几千年来，农作物耕种塑造了这片地貌。"
+  },
+  {
+    "code": "EN-V-0877",
+    "cn": "课程；教学大纲",
+    "mnemonic": "cur(跑，同 current)+riculum→学生要「跑完」的课业，复数 curricula。",
+    "example": "The school recently updated its science curriculum.",
+    "exampleCn": "这所学校最近更新了其科学课程。"
+  },
+  {
+    "code": "EN-V-0878",
+    "cn": "腐烂；衰变",
+    "mnemonic": "de(向下)+cay(落下)→往下掉、逐渐坏掉，「腐烂衰退」。",
+    "example": "Dead leaves decay and return nutrients to the forest soil.",
+    "exampleCn": "落叶腐烂后把养分归还给森林土壤。"
+  },
+  {
+    "code": "EN-V-0879",
+    "cn": "欺骗；骗局",
+    "mnemonic": "de(向下)+cept(抓取)+ion→用手段骗人，「欺骗」；动词 deceive。",
+    "example": "The magician's tricks were harmless deceptions meant only to entertain.",
+    "exampleCn": "魔术师的戏法只是为逗乐而设的无害骗术。"
+  },
+  {
+    "code": "EN-V-0880",
+    "cn": "宣言；声明；申报",
+    "mnemonic": "de+clar(清楚，同 clear)+ation→把话说清楚，「声明宣言」；动词 declare。",
+    "example": "The government issued a declaration of independence in 1776.",
+    "exampleCn": "政府于1776年发布了独立宣言。"
+  },
+  {
+    "code": "EN-V-0881",
+    "cn": "分解；腐烂",
+    "mnemonic": "de(向下)+com(完全)+pose(放)→完全拆开放下，「分解」。",
+    "example": "Bacteria decompose dead organisms and recycle their nutrients.",
+    "exampleCn": "细菌分解死亡的生物并回收其养分。"
+  },
+  {
+    "code": "EN-V-0882",
+    "cn": "缺陷；瑕疵",
+    "mnemonic": "de(向下)+fect(做)→没做好留下「缺陷」；形容词 defective。",
+    "example": "The manufacturer recalled the cars because of a dangerous defect.",
+    "exampleCn": "制造商因一处危险缺陷召回了这些汽车。"
+  },
+  {
+    "code": "EN-V-0884",
+    "cn": "确定的；明确的",
+    "mnemonic": "de+fin(界限，同 finish)+ite→划清界限，「明确的」；反 indefinite。",
+    "example": "We need a definite answer before we can proceed.",
+    "exampleCn": "我们需要一个明确的答复才能继续。"
+  },
+  {
+    "code": "EN-V-0885",
+    "cn": "森林砍伐",
+    "mnemonic": "de(去除)+forest(森林)+ation→去掉森林，「森林砍伐」。",
+    "example": "Deforestation has destroyed much of the rainforest habitat.",
+    "exampleCn": "森林砍伐摧毁了大量雨林栖息地。"
+  },
+  {
+    "code": "EN-V-0886",
+    "cn": "代表团；授权",
+    "mnemonic": "de+leg(派遣)+ation→被派出的一群人，「代表团」；也可指「授权」。",
+    "example": "A delegation of officials visited the neighboring country.",
+    "exampleCn": "一个官员代表团访问了邻国。"
+  },
+  {
+    "code": "EN-V-0887",
+    "cn": "递送；交付",
+    "mnemonic": "de+liv(释放，同 deliver)+ery→把货物释放送出，「递送交付」。",
+    "example": "The company guarantees delivery within two business days.",
+    "exampleCn": "这家公司保证两个工作日内送达。"
+  },
+  {
+    "code": "EN-V-0888",
+    "cn": "民主；民主政体",
+    "mnemonic": "demo(人民)+cracy(统治)→人民做主，「民主」；形容词 democratic。",
+    "example": "Democracy allows citizens to choose their leaders through elections.",
+    "exampleCn": "民主让公民通过选举选择领导人。"
+  },
+  {
+    "code": "EN-V-0889",
+    "cn": "密度；浓度",
+    "mnemonic": "dens(浓密)+ity→浓密的程度，「密度」；形容词 dense。",
+    "example": "The density of water is higher than that of oil.",
+    "exampleCn": "水的密度比油高。"
+  },
+  {
+    "code": "EN-V-0890",
+    "cn": "依赖；依靠",
+    "mnemonic": "de+pend(挂)+ence→挂在别人身上，「依赖」；反 independence。",
+    "example": "The country's dependence on oil exports makes its economy fragile.",
+    "exampleCn": "该国对石油出口的依赖使其经济脆弱。"
+  },
+  {
+    "code": "EN-V-0891",
+    "cn": "词源；推导",
+    "mnemonic": "de+riv(河流，同 river)+ation→从源头流出，「词源；推导」；动词 derive。",
+    "example": "The teacher explained the derivation of the word from Latin.",
+    "exampleCn": "老师解释了这个词源自拉丁语的词源。"
+  },
+  {
+    "code": "EN-V-0892",
+    "cn": "下降；下来",
+    "mnemonic": "de(向下)+scend(爬)→往下爬，「下降」；反 ascend(上升)。",
+    "example": "The hikers descended the mountain before dark.",
+    "exampleCn": "徒步者天黑前下了山。"
+  },
+  {
+    "code": "EN-V-0893",
+    "cn": "指定；标明",
+    "mnemonic": "de+sign(标记)+ate→打上标记，「指定」；名词 designation。",
+    "example": "The committee designated a new site for the research center.",
+    "exampleCn": "委员会为研究中心指定了一个新地点。"
+  },
+  {
+    "code": "EN-V-0894",
+    "cn": "恶化；退化",
+    "mnemonic": "de(向下)+terior(更差)+ation→变得更差，「恶化」；动词 deteriorate。",
+    "example": "The patient's condition showed steady deterioration over the week.",
+    "exampleCn": "这一周患者的病情持续恶化。"
+  },
+  {
+    "code": "EN-V-0895",
+    "cn": "诊断；判断",
+    "mnemonic": "dia(穿过)+gnos(知道，同 know)+is→看透病因，「诊断」；动词 diagnose。",
+    "example": "The doctor made a diagnosis based on the test results.",
+    "exampleCn": "医生根据化验结果做出了诊断。"
+  },
+  {
+    "code": "EN-V-0896",
+    "cn": "直径",
+    "mnemonic": "dia(穿过)+meter(测量)→穿过圆心量出的长度，「直径」。",
+    "example": "Measure the diameter of the circle before calculating its area.",
+    "exampleCn": "计算圆面积前先量出它的直径。"
+  },
+  {
+    "code": "EN-V-0897",
+    "cn": "区分；区别",
+    "mnemonic": "dif(分开)+fer(带)+entiate→分开来带，「区分」；同 differ。",
+    "example": "It is hard to differentiate between the two similar species.",
+    "exampleCn": "很难区分这两个相似的物种。"
+  },
+  {
+    "code": "EN-V-0898",
+    "cn": "扩散；传播",
+    "mnemonic": "dif(分开)+fus(倾倒/流)+ion→向四处流开，「扩散」；动词 diffuse。",
+    "example": "The diffusion of the scent slowly filled the entire room.",
+    "exampleCn": "气味的扩散慢慢弥漫了整个房间。"
+  },
+  {
+    "code": "EN-V-0899",
+    "cn": "消化；领悟",
+    "mnemonic": "di+gest(携带/消化)+ion→把食物消化吸收，「消化」；动词 digest。",
+    "example": "Digestion begins in the mouth and continues in the stomach.",
+    "exampleCn": "消化从口腔开始，并在胃中继续。"
+  }
+]

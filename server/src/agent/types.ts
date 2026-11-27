@@ -118,6 +118,8 @@ export interface ErrorRecord {
   lastSeenAt: string;
   /** 证据 runId 列表，供「为什么认为我冠词弱」追溯 */
   evidence: string[];
+  /** Loop 复习中该错因的遗忘次数（grade <= 1），由 storage 层聚合 */
+  lapseCount?: number;
 }
 
 /** 组装上下文用的档案切片（L1 + L2 层，设计文档 §3.2） */

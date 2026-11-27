@@ -1,0 +1,61 @@
+{
+  "id": "speaking-practice",
+  "title": "口语练习与评估",
+  "version": "0.1.0",
+  "category": "speaking",
+  "modes": [
+    "ask",
+    "craft"
+  ],
+  "match": {
+    "examples": [
+      "帮我练口语",
+      "评估一下我的发音",
+      "我说一段你听听",
+      "口语练习",
+      "这段口语能得几分"
+    ],
+    "signals": [
+      "有音频输入",
+      "提到口语",
+      "提到发音",
+      "提到 speaking"
+    ]
+  },
+  "tools": [
+    "profile.read",
+    "exam.rubric",
+    "speak.asr",
+    "speak.evaluate",
+    "profile.patch"
+  ],
+  "artifacts": [
+    "speaking-report"
+  ],
+  "budget": {
+    "maxSteps": 5,
+    "maxTokens": 8000,
+    "tts": false
+  },
+  "lang": {
+    "requires": [
+      "tokenize",
+      "phonology",
+      "levelScale"
+    ],
+    "exams": {
+      "en": [
+        "ielts",
+        "toefl"
+      ],
+      "ja": [
+        "jlpt"
+      ],
+      "ko": [
+        "topik"
+      ]
+    }
+  },
+  "helpDefault": "L1",
+  "presenter": "speaking-pane"
+}

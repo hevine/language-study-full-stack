@@ -5,6 +5,7 @@ import { logger } from './lib/logger';
 import { tightenPermissions } from './lib/secret';
 import { ensureExamBank } from './repositories/exams';
 import { bootstrapAuth } from './services/auth';
+import { ensureKnowledgeBase } from './services/knowledgeSeed';
 import { llmStatus } from './services/llm';
 import { migrateLegacyKeys } from './services/keyPool';
 import { migrateLegacyAsr } from './services/asrPool';
@@ -16,6 +17,8 @@ function bootstrap(): void {
   bootstrapAuth();
   // 内置的升级自测真题库：补齐缺失的卷子、刷新题目内容（作答记录只存选项下标，不受影响）
   ensureExamBank();
+  // 知识图谱基座：知识树、统一题池、历史作答回填。依赖题库已对齐，所以排在其后
+  ensureKnowledgeBase();
   // 旧版本把 Key 明文写在 settings 里，这里加密封存进号池并把原值抹掉
   migrateLegacyKeys();
   // 旧版单条 ASR 线路（settings.asr.*）搬进识别号池

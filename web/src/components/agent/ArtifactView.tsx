@@ -12,13 +12,14 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../../api';
 import { useApp } from '../../store';
-import { claimMediaPlayback, stopAllSpeech } from '@waiyubaodian/ui-kit';
+import { claimMediaPlayback, stopAllSpeech, AudioPlayer } from '@waiyubaodian/ui-kit';
 import { videoThemeFor } from '@waiyubaodian/ui-kit/theme';
 import type {
   AnnotatedDiffPayload,
   AgentArtifact,
   ExplainJobState,
   ExplainVideoPayload,
+  SpeakingReportPayload,
   SyntaxTreeNodePayload,
   SyntaxTreePayload,
 } from '../../agentTypes';
@@ -37,6 +38,8 @@ export default function ArtifactView({ artifact }: { artifact: AgentArtifact }) 
       return <SyntaxPane data={artifact.data as SyntaxTreePayload} />;
     case 'explain-video':
       return <VideoPane data={artifact.data as ExplainVideoPayload} />;
+    case 'speaking-report':
+      return <SpeakingPane data={artifact.data as SpeakingReportPayload} />;
     default:
       return <GenericPane artifact={artifact} />;
   }
@@ -188,6 +191,220 @@ function SyntaxPane({ data }: { data: SyntaxTreePayload }) {
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 口语评估
+//
+// 口语报告最容易出的问题不是「分不准」，而是「说不清评的是什么」：
+// 一段手打稿拿到 7 分，被当成口语实测，后面所有练习强度都会按错的标准排。
+// 所以依据（录音 / 改过的稿 / 手打）必须和分数长在一起，音频能当场回听。
+// ---------------------------------------------------------------------------
+
+const SPEAK_DIM_LABEL: Record<string, string> = {
+  fluency: '流利度',
+  grammar: '语法',
+  coherence: '连贯性',
+  lexical: '词汇',
+};
+
+/** 节奏实测的分项：这三个是量出来的，不是模型判断的，所以单独一组 */
+const RHYTHM_LABEL: Record<string, string> = {
+  pace: '语速',
+  pausing: '停顿',
+  continuity: '连贯',
+  // 日语专有：整段音高跨度，不指向具体词
+  pronunciation: '发音·抑扬',
+};
+
+function formatSpeakDuration(ms: number | null | undefined): string {
+  if (!ms || ms <= 0) return '';
+  const total = Math.round(ms / 1000);
+  return total >= 60 ? `${Math.floor(total / 60)} 分 ${total % 60} 秒` : `${total} 秒`;
+}
+
+/** 停顿用一位小数：1.4 秒和 1 秒在听感上是两回事，四舍五入会把差别抹掉 */
+function prosodyPause(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '—';
+  return ms >= 10_000 ? `${Math.round(ms / 1000)} 秒` : `${(ms / 1000).toFixed(1)} 秒`;
+}
+
+function SpeakingPane({ data }: { data: SpeakingReportPayload }) {
+  const dims = Array.isArray(data?.dimensions) ? data.dimensions : [];
+  const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : [];
+  const basis = data?.basis;
+  const prosody = data?.prosody;
+  const rhythmDims = Array.isArray(prosody?.dimensions) ? prosody!.dimensions : [];
+  const [notesOpen, setNotesOpen] = useState(false);
+
+  // 主维度与节奏分项共用一次「展开点评」，两个按钮会让人以为各有各的折叠
+  const hasLongNote =
+    dims.some((dim) => (dim.note?.length ?? 0) > 60) || rhythmDims.some((dim) => (dim.note?.length ?? 0) > 60);
+
+  return (
+    <div className="speak-pane">
+      <div className="speak-head">
+        <div className="speak-score">
+          <strong>{Number.isFinite(data?.overall) ? Math.round(data.overall) : '—'}</strong>
+          <span className="hint">/ 100</span>
+          {data?.band ? <span className="chip chip-accent">{data.band}</span> : null}
+        </div>
+        <div className="speak-basis">
+          <span className="hint">评估依据</span>
+          <span className="chip">{basis?.sourceLabel ?? '未知来源'}</span>
+          {basis?.durationMs ? <span className="hint">录音 {formatSpeakDuration(basis.durationMs)}</span> : null}
+          {basis?.phonology ? <span className="chip">含节奏实测</span> : null}
+        </div>
+      </div>
+
+      {data?.summary ? <p className="speak-summary">{data.summary}</p> : null}
+
+      {/* 手打稿与录音实测的可信度不同，必须在分数旁边说清，别藏在文末 */}
+      {basis && basis.source !== 'asr' ? (
+        <p className="speak-caveat">
+          {basis.source === 'asr-edited'
+            ? '这份报告按你改过的转写稿评：语法、用词、连贯可靠，流利度只能按文本特征推测，不代表真实口播。'
+            : '这份报告按文本评：没有录音，流利度与发音只能推测。想测真实口语，录一段再评一次。'}
+        </p>
+      ) : null}
+
+      {/* 有录音却没测出节奏：太短、太吵或解码失败。不说清楚，用户会以为这一栏只是没做 */}
+      {basis?.audioRef && !prosody ? (
+        <p className="speak-caveat">
+          这段录音没测出节奏（太短、环境太吵，或格式解不开），流利度只能按文本推测。换个安静地方重录一次就能测。
+        </p>
+      ) : null}
+
+      {dims.length === 0 ? (
+        <p className="hint">没有解析出评分维度，这次报告可能不完整 —— 重跑一次通常就好。</p>
+      ) : (
+        <div className="speak-dims">
+          {dims.map((dim) => (
+            <div key={dim.id} className="speak-dim">
+              <span className="speak-dim-name">{SPEAK_DIM_LABEL[dim.id] ?? dim.id}</span>
+              <span className="speak-dim-bar">
+                <span style={{ width: `${Math.min(100, Math.max(0, dim.score))}%` }} />
+              </span>
+              <span className="speak-dim-score">{Math.round(dim.score)}</span>
+              {dim.note ? (
+                <p className="speak-dim-note">{notesOpen ? dim.note : dim.note.slice(0, 60) + (dim.note.length > 60 ? '…' : '')}</p>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 实测区：与上面四个维度分开 —— 这些数字是量出来的，模型评的是文本 */}
+      {prosody ? (
+        <div className="speak-prosody">
+          <div className="speak-prosody-head">
+            <span className="speak-prosody-title">节奏实测</span>
+            <span className="chip">{prosody.sourceLabel}</span>
+          </div>
+
+          <div className="speak-stats">
+            <div className="speak-stat">
+              <strong>{Math.round(prosody.wpm)}</strong>
+              <span>{prosody.paceLabel ?? '词/分钟'}</span>
+            </div>
+            <div className="speak-stat">
+              <strong>{prosody.pauseCount}</strong>
+              <span>停顿次数</span>
+            </div>
+            <div className="speak-stat">
+              <strong>{prosodyPause(prosody.longestPauseMs)}</strong>
+              <span>最长停顿</span>
+            </div>
+            <div className="speak-stat">
+              <strong>{Math.round(prosody.speechRatio * 100)}%</strong>
+              <span>发声占比</span>
+            </div>
+            {prosody.pitch ? (
+              <div className="speak-stat">
+                <strong>{prosody.pitch.rangeSemitones}</strong>
+                <span>半音跨度</span>
+              </div>
+            ) : null}
+            {prosody.closures && prosody.closures.length > 0 ? (
+              <div className="speak-stat">
+                <strong>{prosody.closures.length}</strong>
+                <span>短闭塞</span>
+              </div>
+            ) : null}
+          </div>
+
+          {rhythmDims.length > 0 ? (
+            <div className="speak-rhythm-dims">
+              {rhythmDims.map((dim) => (
+                <div key={dim.id} className="speak-rhythm-dim">
+                  <span className="speak-rhythm-name">{RHYTHM_LABEL[dim.id] ?? dim.id}</span>
+                  <span className="speak-rhythm-bar">
+                    <span style={{ width: `${Math.min(100, Math.max(0, dim.score))}%` }} />
+                  </span>
+                  <span className="speak-rhythm-score">{Math.round(dim.score)}</span>
+                  {dim.note ? (
+                    <p className="speak-rhythm-note">
+                      {notesOpen ? dim.note : dim.note.slice(0, 60) + (dim.note.length > 60 ? '…' : '')}
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {prosody.wordLevel.length > 0 ? (
+            <div className="speak-flags">
+              <span className="hint">念得明显偏慢的词</span>
+              <div className="speak-flag-list">
+                {prosody.wordLevel.map((item, index) => (
+                  <span key={`${item.word}-${index}`} className="speak-flag" title={item.hint}>
+                    {item.word}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <p className="speak-prosody-note">{prosody.note}</p>
+          <p className="speak-prosody-limit">
+            {prosody.pitch
+              ? '节奏与抑扬都是从波形实测的，但不指向具体词：长音、促音、アクセント 的位置对不对，需要强制对齐才判得了，这一版不评 —— 别把它当发音总分看。'
+              : '只评节奏。音素读得准不准（θ 读成 s、重音放错）需要音素级对齐，这一版不评 —— 别把它当发音总分看。'}
+          </p>
+        </div>
+      ) : null}
+
+      {hasLongNote ? (
+        <button className="btn btn-sm speak-notes-toggle" onClick={() => setNotesOpen((open) => !open)}>
+          {notesOpen ? '收起详细点评' : '展开详细点评'}
+        </button>
+      ) : null}
+
+      {suggestions.length > 0 ? (
+        <div className="speak-advice">
+          <span className="speak-advice-title">下一次先改这三处</span>
+          <ul>
+            {suggestions.map((item, index) => (
+              <li key={index}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {basis?.transcript ? (
+        <div className="speak-transcript">
+          <div className="speak-transcript-head">
+            <span className="hint">这次评的原文</span>
+            <span className="hint">{basis.transcript.length} 字</span>
+          </div>
+          <p>{basis.transcript}</p>
+          {basis.audioRef ? (
+            <AudioPlayer src={`/api/agent/audio/${basis.audioRef}`} label="原音回放" />
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -407,6 +407,13 @@ export interface LexWord {
   theme: string;
   level: string;
   inBook: boolean;
+  /** 分级词表字段：编码、词形变化、近义/反义/派生、频段；精讲词可能没有 */
+  code?: string;
+  forms?: string;
+  relations?: string;
+  band?: string;
+  /** 来自分级词表、中文释义与例句尚待补充 */
+  pending?: boolean;
 }
 
 export interface LexiconResponse {
@@ -416,6 +423,62 @@ export interface LexiconResponse {
   levels: LexLevel[];
   words: LexWord[];
   stats: { total: number; due: number; mastered: number };
+}
+
+/** 内置语法库的一个级别档：id 是该语种刻度（A2 / N5 / 3），label 是教研原始写法（T1/A2 / N5 / TOPIK 1） */
+export interface GrammarLevel {
+  id: string;
+  label: string;
+  short: string;
+  total: number;
+  catalogLevels: Array<{ id: string; name: string }>;
+}
+
+export interface GrammarPoint {
+  ref: string;
+  code: string;
+  name: string;
+  level: string;
+  levelLabel: string;
+  structure: string;
+  meaning: string;
+  synonym: string;
+  example: string;
+  translation: string;
+  note: string;
+  errorRule: { ref: string; code: string; name: string } | null;
+}
+
+/** 错因规则：一种典型错误的触发 / 表现 / 判定，可被多个语法点共用 */
+export interface GrammarRule {
+  ref: string;
+  code: string;
+  name: string;
+  trigger: string;
+  symptom: string;
+  judgement: string;
+  pointCount: number;
+  pointRefs: string[];
+}
+
+export interface GrammarLibraryResponse {
+  language: string;
+  source: string;
+  examId: string;
+  examName: string;
+  levels: GrammarLevel[];
+  /** 已按级别 / 搜索筛选过的语法点 */
+  points: GrammarPoint[];
+  /** 已按搜索筛选过的错因规则 */
+  rules: GrammarRule[];
+  stats: {
+    points: number;
+    rules: number;
+    linkedPoints: number;
+    linkedRules: number;
+    /** 图谱里还没有这个语种的语法节点 */
+    seeded: boolean;
+  };
 }
 
 export interface LlmModelOption {

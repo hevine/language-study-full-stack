@@ -1,0 +1,24 @@
+{
+  "code": "ko",
+  "name": "한국어",
+  "script": ["hangul"],
+  "tokenizer": "eojeol",
+  "syntax": "chunk",
+  "phonology": "syllable",
+  "levelScale": { "id": "topik", "bands": ["1급", "2급", "3급", "4급", "5급", "6급"] },
+  "exams": ["topik"],
+  "scenes": {
+    "supported": [
+      "vocab",
+      "grammar",
+      "sentence",
+      "reading",
+      "writing",
+      "speaking",
+      "exam",
+      "translation",
+      "peripheral"
+    ],
+    "unsupported": {}
+  }
+}

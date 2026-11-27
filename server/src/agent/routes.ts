@@ -4,18 +4,113 @@
  * 前缀独立不是为了好看：将来要把 Agent 拆成独立进程时，
  * 反代上把这个前缀整体转发过去就行，前端与主站都不用动。
  */
-import { Router } from 'express';
+import express, { Router } from 'express';
 import { z } from 'zod';
-import { NotFoundError, ValidationError } from '../lib/errors';
+import { currentUserId } from '../auth/requestScope';
+import { adoptToLoop } from '../loop/store';
+import type { DerivedCard } from '../loop/types';
+import { AppError, NotFoundError, UpstreamError, ValidationError } from '../lib/errors';
 import { asyncHandler, parseBody } from '../lib/http';
 import { logger } from '../lib/logger';
+import {
+  deleteAgentAudio,
+  languageOf,
+  MAX_AUDIO_BYTES,
+  patchAgentAudioDuration,
+  readAgentAudioBytes,
+  saveAgentAudio,
+  writeAgentProsody,
+  AUDIO_SOURCES,
+} from '../services/agentAudio';
+import { transcribeAudio } from '../services/asr';
+import { measureProsody } from '../services/speechTiming';
+import { spokenUnitCount } from './adapters/units';
 import { resolveTtsFile } from './adapters/media';
 import { getAgentRuntime, reloadAgentRuntime } from './adapters/inprocess';
-import { runAgent } from './core';
+import { runAgent, type AgentRequest } from './core';
 import { LearnerPatchSchema, type AgentRun } from './protocols';
+import { SessionOrchestrator } from './session/orchestrator';
 import type { LangCode } from './types';
 
 export const agentRouter = Router();
+
+// ---------------------------------------------------------------------------
+// Session 路由（多任务编排）
+// ---------------------------------------------------------------------------
+
+let orchestrator: SessionOrchestrator | null = null;
+
+function getOrchestrator(): SessionOrchestrator {
+  if (!orchestrator) orchestrator = new SessionOrchestrator(getAgentRuntime());
+  return orchestrator;
+}
+
+const EnqueueSchema = z.object({
+  query: z.string().max(2000).optional(),
+  text: z.string().max(20_000).optional(),
+  mode: z.enum(['ask', 'craft', 'coach']).default('craft'),
+  scene: z.string().max(40).optional(),
+  exam: z.string().max(40).optional(),
+  articleId: z.string().max(120).optional(),
+  helpLevel: z.enum(['L0', 'L1', 'L2', 'L3']).optional(),
+  audioRef: z.string().max(100_000).optional(),
+});
+
+agentRouter.post(
+  '/agent/sessions',
+  asyncHandler(async (req, res) => {
+    const lang = (req.body?.lang ?? 'en') as string;
+    const sessionId = getOrchestrator().createSession(currentUserId(), lang as LangCode);
+    res.json({ sessionId });
+  }),
+);
+
+agentRouter.post(
+  '/agent/sessions/:id/enqueue',
+  asyncHandler(async (req, res) => {
+    const input = parseBody(EnqueueSchema, req.body ?? {});
+    const taskIds = getOrchestrator().enqueue(req.params.id, input);
+    res.json({ taskIds });
+  }),
+);
+
+agentRouter.get(
+  '/agent/sessions/:id',
+  asyncHandler(async (req, res) => {
+    const state = getOrchestrator().getSession(req.params.id);
+    if (!state) throw new NotFoundError('session 不存在');
+    res.json({
+      tasks: state.tasks.map((t) => ({ id: t.id, sceneId: t.sceneId, status: t.status })),
+    });
+  }),
+);
+
+agentRouter.post(
+  '/agent/sessions/:id/run',
+  asyncHandler(async (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const send = (payload: unknown) => {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    };
+
+    try {
+      for await (const event of getOrchestrator().run(req.params.id)) {
+        send(event);
+      }
+    } catch (err) {
+      logger.warn('session run 失败', { err: (err as Error).message });
+      send({ type: 'error', message: (err as Error).message });
+    } finally {
+      res.write('event: end\ndata: [DONE]\n\n');
+      res.end();
+    }
+  }),
+);
 
 const RunSchema = z.object({
   lang: z.enum(['en', 'ja', 'ko']).default('en'),
@@ -26,9 +121,38 @@ const RunSchema = z.object({
   scene: z.string().max(40).optional(),
   /** 阅读类场景必填：讲解视频按文章生成 */
   articleId: z.string().max(120).optional(),
+  /** 口语场景：先 POST /agent/audio 拿到 audioRef，再带上来 */
+  audioRef: z.string().max(80).optional(),
+  audioName: z.string().max(160).optional(),
+  audioDurationMs: z.number().nonnegative().optional(),
+  audioSource: z.enum(AUDIO_SOURCES).optional(),
+  /** 文本来源：手打 / 转写 / 转写后改过 —— 决定口语工具要不要重新转写 */
+  transcriptSource: z.enum(['typed', 'asr', 'asr-edited']).optional(),
   helpLevel: z.enum(['L0', 'L1', 'L2', 'L3']).optional(),
   userId: z.string().max(60).default('local'),
 });
+
+type RunInput = z.infer<typeof RunSchema>;
+
+/** 把 HTTP 入参摊平成内核请求：audio 的散字段在这里收成一个对象，内核只认一个 audioRef */
+function toAgentRequest(input: RunInput): AgentRequest {
+  return {
+    userId: input.userId,
+    lang: input.lang,
+    mode: input.mode,
+    query: input.query,
+    text: input.text,
+    exam: input.exam,
+    scene: input.scene,
+    articleId: input.articleId,
+    helpLevel: input.helpLevel,
+    audioRef: input.audioRef,
+    transcriptSource: input.transcriptSource,
+    audio: input.audioRef
+      ? { name: input.audioName, durationMs: input.audioDurationMs, source: input.audioSource }
+      : undefined,
+  };
+}
 
 /** 场景与能力清单：前端据此决定显示哪些入口，不支持的语种直接不出现 */
 agentRouter.get(
@@ -97,14 +221,18 @@ agentRouter.post(
     res.flushHeaders();
 
     const controller = new AbortController();
-    req.on('close', () => controller.abort());
+    // 只监听响应侧：POST 的 req 'close' 在请求体读完时就会触发，
+    // 拿它当中断信号会让 Agent 刚启动就把每一步标成「已中断」。
+    res.on('close', () => {
+      if (!res.writableEnded) controller.abort();
+    });
 
     const send = (payload: unknown) => {
       res.write(`data: ${JSON.stringify(payload)}\n\n`);
     };
 
     try {
-      for await (const event of runAgent({ ...input, signal: controller.signal }, runtime)) {
+      for await (const event of runAgent({ ...toAgentRequest(input), signal: controller.signal }, runtime)) {
         send(event);
       }
     } catch (err) {
@@ -129,7 +257,7 @@ agentRouter.post(
     let clarification: unknown = null;
     let error: string | null = null;
 
-    for await (const event of runAgent(input, runtime)) {
+    for await (const event of runAgent(toAgentRequest(input), runtime)) {
       events.push(event);
       if (event.type === 'done') run = event.run;
       if (event.type === 'clarify') clarification = event;
@@ -241,17 +369,36 @@ agentRouter.post(
       },
     });
 
+    // 产物 → 复习卡：与任务、错因库并列的一次写入。
+    // 卡片写失败不能让「采纳」整体失败 —— 用户已经确认过了，任务与错因更重要。
+    let cards: { preview: DerivedCard[]; created: number } = { preview: [], created: 0 };
+    try {
+      cards = adoptToLoop({
+        userId: scopedUserId(input.userId),
+        run,
+        artifact,
+        confirm: input.confirm,
+      });
+    } catch (err) {
+      logger.warn('loop 卡片写入失败', {
+        artifactId: input.artifactId,
+        error: (err as Error).message,
+      });
+    }
+
     logger.info('agent 产物采纳', {
       runId: run.runId,
       artifactId: artifact.artifactId,
       confirmed: input.confirm,
       attached: attach.attached,
       rules: ruleIds.size,
+      cards: cards.created,
     });
 
     res.json({
       confirm: input.confirm,
       attached: attach.attached,
+      cards,
       taskId: attach.taskId ?? null,
       taskTitle: attach.taskTitle ?? null,
       reason: attach.reason ?? null,
@@ -262,6 +409,114 @@ agentRouter.post(
        */
       closedLoop: Boolean(input.confirm && attach.attached),
     });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// 口语录音：上传 / 转写 / 试听 / 丢弃
+//
+// 为什么把「存」和「转写」拆成两步：
+// 转写依赖号池，可能全部线路失败。这时音频已经安全落在服务端，
+// 用户只需要重试转写，不该被逼着重录一遍 —— 录音笔里那段可能已经删了。
+// ---------------------------------------------------------------------------
+
+const AUDIO_MIME: Record<string, string> = {
+  webm: 'audio/webm',
+  wav: 'audio/wav',
+  mp3: 'audio/mpeg',
+  m4a: 'audio/mp4',
+  mp4: 'audio/mp4',
+  ogg: 'audio/ogg',
+  opus: 'audio/ogg',
+  aac: 'audio/aac',
+  flac: 'audio/flac',
+  amr: 'audio/amr',
+};
+
+function queryString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+agentRouter.post(
+  '/agent/audio',
+  express.raw({ type: () => true, limit: MAX_AUDIO_BYTES }),
+  asyncHandler(async (req, res) => {
+    const body = req.body;
+    if (!Buffer.isBuffer(body) || body.length === 0) {
+      throw new ValidationError('没有收到录音内容，请确认麦克风已经录到声音');
+    }
+    if (body.length > MAX_AUDIO_BYTES) throw new ValidationError('录音超过 25MB 上限，请截取更短的一段');
+
+    const rawSource = queryString(req.query.source);
+    const source = rawSource && (AUDIO_SOURCES as readonly string[]).includes(rawSource)
+      ? (rawSource as (typeof AUDIO_SOURCES)[number])
+      : undefined;
+    const durationMs = Number(req.query.durationMs);
+
+    const audio = saveAgentAudio(body, {
+      name: queryString(req.query.name),
+      lang: queryString(req.query.lang) ?? 'en',
+      durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
+      source,
+      mime: req.headers['content-type'],
+    });
+    res.status(201).json({ audio });
+  }),
+);
+
+agentRouter.post(
+  '/agent/audio/:id/transcribe',
+  asyncHandler(async (req, res) => {
+    const found = readAgentAudioBytes(req.params.id);
+    if (!found) throw new NotFoundError('这段录音已经不在了，重新录一段，或者把文字贴进来');
+
+    const lang = languageOf(queryString(req.body?.lang) ?? found.meta.lang);
+    try {
+      // withTiming：界面上这一次转写就该把时间戳/节奏一起拿到，
+      // 否则 run 里还要为同一段音频再识别或再解码一次
+      const result = await transcribeAudio(found.buffer, lang, found.fileName, { withTiming: true });
+      const measurement = await measureProsody({
+        buffer: found.buffer,
+        text: result.text,
+        words: result.words,
+        segments: result.segments,
+        claimedDurationMs: result.durationMs ?? found.meta.durationMs,
+        // 日语的「说了多少」是モーラ，不是词；数错了整份语速都会失真
+        wordCount: await spokenUnitCount(result.text, lang),
+      });
+      if (measurement) {
+        writeAgentProsody(found.meta.audioId, measurement);
+        patchAgentAudioDuration(found.meta.audioId, measurement.durationMs);
+      }
+      res.json({
+        audio: found.meta,
+        transcript: result.text,
+        line: result.line,
+        model: result.model,
+        prosody: measurement ?? null,
+      });
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      throw new UpstreamError((err as Error).message || '语音识别失败');
+    }
+  }),
+);
+
+agentRouter.get(
+  '/agent/audio/:id',
+  asyncHandler(async (req, res) => {
+    const found = readAgentAudioBytes(req.params.id);
+    if (!found) throw new NotFoundError('这段录音已经不在了');
+    res.setHeader('Content-Type', AUDIO_MIME[found.meta.ext] ?? 'application/octet-stream');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(found.buffer);
+  }),
+);
+
+agentRouter.delete(
+  '/agent/audio/:id',
+  asyncHandler(async (req, res) => {
+    res.json({ ok: deleteAgentAudio(req.params.id) });
   }),
 );
 
@@ -310,3 +565,9 @@ agentRouter.get(
     res.json(state);
   }),
 );
+
+/** 登录时以会话为准；游客保留请求里的 userId（默认 local），兼容单机用法 */
+function scopedUserId(fallback: string): string {
+  const scoped = currentUserId();
+  return scoped === 'local' ? fallback : scoped;
+}

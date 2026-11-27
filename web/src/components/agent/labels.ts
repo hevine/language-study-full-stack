@@ -15,6 +15,8 @@ export const TOOL_LABEL: Record<string, string> = {
   'gra.parse': '句法拆解（模型）',
   'gra.contrast': '母语迁移对照',
   'explain.video': '生成解题讲解',
+  'speak.asr': '取出转写稿',
+  'speak.evaluate': '口语评估（模型）',
 };
 
 /** 说的是「这一步在干什么」，不是「调用了什么函数」 */
@@ -27,6 +29,8 @@ export const TOOL_HINT: Record<string, string> = {
   'gra.parse': '拆主干与修饰，逐层标出成分',
   'gra.contrast': '对照中文母语习惯，指出哪些地方容易迁移错',
   'explain.video': '起一个讲解作业，真视频异步产出',
+  'speak.asr': '有录音就转写；已经有稿子就用你确认过的那一份',
+  'speak.evaluate': '按流利度、语法、连贯、用词四个维度打分，并给出下一次的改法',
 };
 
 export const CATEGORY_LABEL: Record<AgentSceneCategory, string> = {

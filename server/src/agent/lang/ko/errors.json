@@ -1,0 +1,15 @@
+{
+  "rules": [
+    { "id": "particle", "label": "助词误用（은/는·이/가、을/를、에/에서）", "severity": "must-fix" },
+    { "id": "ending", "label": "语尾使用（-ㄹ게요、-는데/-니까 混用）", "severity": "must-fix" },
+    { "id": "register", "label": "语体混用（합니다体 / 해요体 / 해体）", "severity": "style" },
+    { "id": "honorific", "label": "敬语层级（께서 与 드시다/잡수시다 要成套）", "severity": "must-fix" },
+    { "id": "spacing", "label": "分写（수 있다、것 같다、때문에）", "severity": "should-fix" },
+    { "id": "tense", "label": "时制（过去时间词配现在时）", "severity": "should-fix" },
+    { "id": "counter", "label": "单位名词（명/분、마리、권、대）", "severity": "should-fix" },
+    { "id": "orthography", "label": "拼写（됐/됬、안/않、며칠）", "severity": "must-fix" },
+    { "id": "word-order", "label": "语序（谓语位置与补语前置）", "severity": "style" },
+    { "id": "sino-korean", "label": "汉字词同形异义（공부/애인/선생）", "severity": "must-fix" },
+    { "id": "translationese", "label": "翻译腔（-에 대해서 / -에 의해 滥用）", "severity": "style" }
+  ]
+}

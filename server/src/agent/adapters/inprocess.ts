@@ -14,6 +14,9 @@ import { loadScenePacks } from '../scenes/loader';
 import { BUILTIN_TOOLS } from '../tools/builtin';
 import { ToolRegistry } from '../tools/registry';
 import { createEnSyntax, enLevel, enPhonology, enTaxonomy, enTokenizer } from './en';
+import { createJaSyntax, jaLevel, jaPhonology, jaTaxonomy, jaTokenizer } from './ja';
+import { createKoSyntax, koLevel, koPhonology, koTaxonomy, koTokenizer } from './ko';
+import { createAsrPort } from './asr';
 import { createLlmPort } from './llm';
 import { createMediaPort } from './media';
 import { createLearnerStore, createTraceStore } from './storage';
@@ -25,13 +28,31 @@ function buildRuntime(): AgentRuntime {
   const registry = new ToolRegistry();
   for (const tool of BUILTIN_TOOLS) registry.register(tool);
 
-  // 英语能力先接通；日语需要 kuromoji 分词 + 助词/敬语规则集，按 M2 计划补
+  // 英语：分词按空格，句法走 LLM，规则集是拉丁文字那一套
   const enPorts: LanguagePorts = {
     tokenizer: enTokenizer,
     syntax: createEnSyntax(llm),
     taxonomy: enTaxonomy,
     phonology: enPhonology,
     level: enLevel,
+  };
+
+  // 日语：分词走 kuromoji 词典，句法按文节算，规则集是助词／活用／敬语那一套
+  const jaPorts: LanguagePorts = {
+    tokenizer: jaTokenizer,
+    syntax: createJaSyntax(llm),
+    taxonomy: jaTaxonomy,
+    phonology: jaPhonology,
+    level: jaLevel,
+  };
+
+  // 韩语：空格即词边界（어절），句法按 조사 定角色，规则集是助词／语尾／语体那一套
+  const koPorts: LanguagePorts = {
+    tokenizer: koTokenizer,
+    syntax: createKoSyntax(llm),
+    taxonomy: koTaxonomy,
+    phonology: koPhonology,
+    level: koLevel,
   };
 
   const deps: AgentDeps = {
@@ -42,7 +63,9 @@ function buildRuntime(): AgentRuntime {
     tasks: createTaskPort(),
     // TTS + 讲解视频：复用主项目已有链路，本层只做协议适配
     media: createMediaPort(),
-    language: (code) => (code === 'en' ? enPorts : null),
+    // 语音识别：复用主项目转写号池（多线路 + 冷却换线），口语场景靠它把录音变成转写稿
+    asr: createAsrPort(),
+    language: (code) => (code === 'en' ? enPorts : code === 'ja' ? jaPorts : code === 'ko' ? koPorts : null),
     now: () => new Date(),
   };
 

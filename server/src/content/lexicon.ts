@@ -17,6 +17,17 @@ import {
   type LexWord,
   type WordTier,
 } from './toeflLexicon';
+import {
+  GRADED_LEVEL_DESCRIPTION,
+  GRADED_LEVELS,
+  GRADED_SOURCE,
+  GRADED_WORDS,
+  gradedByTerm,
+  isToeflGrade,
+  listGradedWords,
+  type ToeflGrade,
+} from './toeflGraded';
+import { enhancedOf } from './toeflEnhanced';
 
 export type LexLanguage = 'en' | 'ja' | 'ko';
 
@@ -32,6 +43,16 @@ export interface LexEntry {
   syn: string[];
   theme: string;
   level: string;
+  /** 分级词库的稳定编码（EN-V-0001）；精讲词没有 */
+  code?: string;
+  /** 词形变化，如 affects, affected, affecting */
+  forms?: string;
+  /** 近义/反义/派生原文，如「近 influence, impact；派 effect n.」 */
+  relations?: string;
+  /** 频段（估算）：超高频 / 高频 / 中频 / 低频 */
+  band?: string;
+  /** true 表示来自分级词表、中文释义与例句尚待补充 */
+  pending?: boolean;
 }
 
 export interface LexLevelMeta {
@@ -42,29 +63,48 @@ export interface LexLevelMeta {
   total: number;
 }
 
-const EN_LEVEL_META: Record<WordTier, { name: string; short: string; description: string }> = {
-  basic: {
-    name: '过渡词',
-    short: '基础',
-    description: '四级到托福之间的缺口词，冲 90 分之前必须清掉。',
-  },
-  core: {
-    name: '托福核心',
-    short: '核心',
-    description: '阅读与听力里出现频率最高的学术动词、形容词与名词。',
-  },
-  advanced: {
-    name: '冲 100 拉分',
-    short: '拉分',
-    description: '学术写作与讲座里用来替换口语词的高级表达。',
-  },
-};
-
 export const LEX_SOURCE: Record<LexLanguage, string> = {
-  en: LEXICON_SOURCE,
+  en: `${LEXICON_SOURCE}；已并入${GRADED_SOURCE()}，分级词中文释义/记忆法/例句为原创撰写`,
   ja: '按 JLPT 出题基准的级别划分（N3 / N2 / N1）与主题分类整理，释义、记忆法、例句为原创撰写',
   ko: '按 TOPIK 官方级别范围与主题分类整理（1–6 级），释义、记忆法、例句为原创撰写',
 };
+
+/**
+ * 英语分级词的档位换算。
+ * 精讲词优先用它在 1600 词表里的真实档位；不在表里的按旧 tier 兜底（basic→L1 / core→L3 / advanced→L5）。
+ * 旧的 basic / core / advanced 仍然接受，避免已有的词汇本与链接失效。
+ */
+const EN_TIER_TO_GRADE: Record<WordTier, ToeflGrade> = {
+  basic: 'L1',
+  core: 'L3',
+  advanced: 'L5',
+};
+const EN_LEGACY_TO_GRADE: Record<string, ToeflGrade> = {
+  basic: 'L1',
+  core: 'L3',
+  advanced: 'L5',
+};
+
+let gradedIndexCache: Map<string, import('./toeflGraded').GradedWord> | null = null;
+
+function gradedIndex(): Map<string, import('./toeflGraded').GradedWord> {
+  if (!gradedIndexCache) gradedIndexCache = gradedByTerm();
+  return gradedIndexCache;
+}
+
+function gradedWordOf(term: string): import('./toeflGraded').GradedWord | undefined {
+  return gradedIndex().get(term.toLowerCase());
+}
+
+function gradeOfWord(word: LexWord): ToeflGrade {
+  return gradedWordOf(word.term)?.level ?? EN_TIER_TO_GRADE[word.tier];
+}
+
+function normalizeEnLevel(level?: string): ToeflGrade | undefined {
+  if (!level) return undefined;
+  if (isToeflGrade(level)) return level;
+  return EN_LEGACY_TO_GRADE[level];
+}
 
 function toLexEntry(word: LexWord): LexEntry {
   return {
@@ -100,13 +140,22 @@ export function lexLevels(language: LexLanguage): LexLevelMeta[] {
       total: KO_WORDS.filter((word) => word.level === level).length,
     }));
   }
-  return (['basic', 'core', 'advanced'] as WordTier[]).map((tier) => ({
-    id: tier,
-    name: EN_LEVEL_META[tier].name,
-    short: EN_LEVEL_META[tier].short,
-    description: EN_LEVEL_META[tier].description,
-    total: TOEFL_WORDS.filter((word) => word.tier === tier).length,
-  }));
+  const index = gradedIndex();
+  const gradedWords = GRADED_WORDS();
+  return GRADED_LEVELS().map((level) => {
+    const gradedCount = gradedWords.filter((word) => word.level === level.id).length;
+    // 精讲词若已在 1600 表里，已计入 gradedCount，不能再加一次
+    const extra = TOEFL_WORDS.filter(
+      (word) => !index.has(word.term.toLowerCase()) && gradeOfWord(word) === level.id,
+    ).length;
+    return {
+      id: level.id,
+      name: `${level.name} ${level.cefr}`,
+      short: level.id,
+      description: GRADED_LEVEL_DESCRIPTION[level.id],
+      total: gradedCount + extra,
+    };
+  });
 }
 
 /**
@@ -116,6 +165,10 @@ export function lexLevels(language: LexLanguage): LexLevelMeta[] {
 const EXTRA_LEVEL_NAME: Record<string, string> = {
   n5: 'N5 入门词',
   n4: 'N4 初级词',
+  // 旧英语档位：已进词汇本的词仍可能是这些值，展示时给回对应的 L 档名称
+  basic: 'L1 基础',
+  core: 'L3 进阶',
+  advanced: 'L5 高难·低频',
 };
 
 export function lexLevelName(language: LexLanguage, level: string): string {
@@ -176,13 +229,68 @@ export function listLexEntries(
       }));
   }
 
-  return TOEFL_WORDS.filter((word) => (level ? word.tier === level : true))
-    .filter((word) =>
-      keyword
-        ? [word.term, word.cn, word.theme].some((field) => field.toLowerCase().includes(keyword))
-        : true,
-    )
-    .map(toLexEntry);
+  const grade = normalizeEnLevel(level);
+  const entries: LexEntry[] = [];
+  const seen = new Set<string>();
+
+  // 第一层：精讲词，字段完整（释义 / 记忆法 / 例句），优先展示
+  for (const word of TOEFL_WORDS) {
+    const key = word.term.toLowerCase();
+    const wordGrade = gradeOfWord(word);
+    if (grade && wordGrade !== grade) continue;
+    if (
+      keyword &&
+      ![word.term, word.cn, word.theme, word.pos].some((field) =>
+        field.toLowerCase().includes(keyword),
+      )
+    ) {
+      continue;
+    }
+    const graded = gradedWordOf(word.term);
+    entries.push({
+      ...toLexEntry(word),
+      level: wordGrade,
+      code: graded?.code,
+      forms: graded?.forms,
+      relations: graded?.relations,
+      band: graded?.band,
+    });
+    seen.add(key);
+  }
+
+  // 第二层：分级词表补足覆盖；缺释义/例句的标 pending，界面显示占位
+  for (const word of listGradedWords({ level: grade })) {
+    const key = word.term.toLowerCase();
+    if (seen.has(key)) continue;
+    if (
+      keyword &&
+      ![word.term, word.theme, word.relations, word.pos].some((field) =>
+        field.toLowerCase().includes(keyword),
+      )
+    ) {
+      continue;
+    }
+    const enhanced = enhancedOf(word.code);
+    entries.push({
+      term: word.term,
+      reading: word.ipa,
+      pos: word.pos,
+      cn: enhanced?.cn ?? '',
+      mnemonic: enhanced?.mnemonic ?? '',
+      example: enhanced?.example ?? '',
+      exampleCn: enhanced?.exampleCn ?? '',
+      syn: [],
+      theme: word.theme,
+      level: word.level,
+      code: word.code,
+      forms: word.forms,
+      relations: word.relations,
+      band: word.band,
+      pending: !enhanced,
+    });
+  }
+
+  return entries;
 }
 
 /**

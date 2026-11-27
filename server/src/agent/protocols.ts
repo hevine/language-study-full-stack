@@ -173,37 +173,132 @@ export type LearnerPatch = z.infer<typeof LearnerPatchSchema>;
 // 分类型 payload（G1 结构校验用；也是前端渲染器的输入契约）
 // ---------------------------------------------------------------------------
 
-export const AnnotatedDiffSchema = z.object({
-  items: z
-    .array(
-      z.object({
-        before: z.string(),
-        after: z.string(),
-        ruleId: z.string().default(''),
-        reason: z.string().default(''),
-        severity: z.enum(['must-fix', 'should-fix', 'style']).default('should-fix'),
-        accept: z.boolean().nullable().default(null),
-      }),
-    )
-    .default([]),
-  /** 双通道分：规则引擎与 LLM 各一份，G3 比对的就是这两个 */
-  score: z
-    .object({
-      dimensions: z
-        .array(z.object({ id: z.string(), name: z.string(), score: z.number(), weight: z.number() }))
-        .default([]),
-      ruleOverall: z.number().optional(),
-      llmOverall: z.number().optional(),
-      band: z.string().optional(),
-    })
-    .optional(),
-  rewrite: z.string().optional(),
-  /**
-   * 降级说明。有值就表示这份批改不完整（例如模型超时，只剩规则通道）。
-   * 不写这一条，降级结果会被当成完整结论用 —— 这比不返回更危险。
-   */
-  note: z.string().optional(),
-});
+/**
+ * 模型字段名归一化。
+ *
+ * 不同模型对「批改条目」的命名差异极大：annotations / issues / feedback，
+ * quote / original / text，fix / suggestion / corrected……而 z.object 会静默 strip
+ * 未知字段、并对缺失字段套默认值 —— 结果是一份完全错位的输出被「成功」解析成
+ * items: []，用户看到的是「模型没返回结果」，排查方向全被带偏。
+ *
+ * 所以在进 schema 之前先做一次别名映射：字段名不对就纠正，值缺失才回落。
+ * 这一步只改键名，不编造内容。
+ */
+const ITEM_FIELD_ALIASES: Record<string, string[]> = {
+  before: ['before', 'quote', 'original', 'text', 'snippet', 'source', 'original_text'],
+  after: ['after', 'fix', 'suggestion', 'corrected', 'replacement', 'revised', 'improved'],
+  reason: ['reason', 'problem', 'explanation', 'note', 'issue', 'comment', 'detail', 'location'],
+  ruleId: ['ruleId', 'rule_id', 'rule', 'type', 'category', 'error_type'],
+  severity: ['severity', 'level', 'priority', 'importance'],
+};
+
+function pickField(source: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) {
+    const value = source[key];
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return undefined;
+}
+
+function normalizeSeverity(raw: unknown): 'must-fix' | 'should-fix' | 'style' {
+  if (raw === 'must-fix' || raw === 'should-fix' || raw === 'style') return raw;
+  const text = String(raw ?? '').toLowerCase();
+  if (/critical|high|fatal|major|严重|must/.test(text)) return 'must-fix';
+  if (/low|minor|info|style|建议|轻微/.test(text)) return 'style';
+  return 'should-fix';
+}
+
+function normalizeDiffItem(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object') return raw;
+  const source = raw as Record<string, unknown>;
+  const before = pickField(source, ITEM_FIELD_ALIASES.before);
+  const after = pickField(source, ITEM_FIELD_ALIASES.after);
+  const beforeText = typeof before === 'string' ? before : '';
+  return {
+    before: beforeText,
+    // 只给了原文没给改法时，回落到原文，让卡片至少能背原句
+    after: typeof after === 'string' ? after : beforeText,
+    ruleId: String(pickField(source, ITEM_FIELD_ALIASES.ruleId) ?? ''),
+    reason: String(pickField(source, ITEM_FIELD_ALIASES.reason) ?? ''),
+    severity: normalizeSeverity(pickField(source, ITEM_FIELD_ALIASES.severity)),
+    accept: null,
+  };
+}
+
+function normalizeDimension(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object') return raw;
+  const source = raw as Record<string, unknown>;
+  const score = Number(source.score);
+  const weight = Number(source.weight);
+  const id = String(source.id ?? source.key ?? source.name ?? 'dimension');
+  return {
+    id,
+    name: String(source.name ?? source.label ?? source.title ?? id),
+    score: Number.isFinite(score) ? score : 0,
+    weight: Number.isFinite(weight) && weight > 0 ? weight : 0,
+  };
+}
+
+function normalizeAnnotatedDiff(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const source = raw as Record<string, unknown>;
+
+  const itemsRaw = source.items ?? source.annotations ?? source.issues ?? source.feedback ?? source.errors ?? source.corrections;
+  const items = Array.isArray(itemsRaw) ? itemsRaw.map(normalizeDiffItem) : undefined;
+
+  const scoreRaw = source.score && typeof source.score === 'object' && !Array.isArray(source.score)
+    ? (source.score as Record<string, unknown>)
+    : undefined;
+  const dimsRaw = scoreRaw?.dimensions ?? source.dimensions ?? source.scores ?? source.dimension_scores;
+  const dimensions = Array.isArray(dimsRaw) ? dimsRaw.map(normalizeDimension) : undefined;
+
+  const score = scoreRaw || dimensions
+    ? { ...(scoreRaw ?? {}), ...(dimensions ? { dimensions } : {}) }
+    : undefined;
+
+  return {
+    ...source,
+    ...(items ? { items } : {}),
+    ...(score ? { score } : {}),
+  };
+}
+
+export const AnnotatedDiffSchema = z.preprocess(
+  normalizeAnnotatedDiff,
+  z.object({
+    items: z
+      .array(
+        z.object({
+          before: z.string(),
+          after: z.string(),
+          ruleId: z.string().default(''),
+          reason: z.string().default(''),
+          severity: z.enum(['must-fix', 'should-fix', 'style']).default('should-fix'),
+          accept: z.boolean().nullable().default(null),
+        }),
+      )
+      .default([]),
+    /** 双通道分：规则引擎与 LLM 各一份，G3 比对的就是这两个 */
+    score: z
+      .object({
+        dimensions: z
+          .array(z.object({ id: z.string(), name: z.string(), score: z.number(), weight: z.number() }))
+          .default([]),
+        // 模型经常显式给 null 表示「这项没有」；null 必须折成 undefined，
+        // 否则 verifier 的 `!== undefined` 会把 null 当成有效值参与分差比对。
+        ruleOverall: z.number().nullish().transform((v) => v ?? undefined),
+        llmOverall: z.number().nullish().transform((v) => v ?? undefined),
+        band: z.string().nullish().transform((v) => v ?? undefined),
+      })
+      .optional(),
+    rewrite: z.string().nullish().transform((v) => v ?? undefined),
+    /**
+     * 降级说明。有值就表示这份批改不完整（例如模型超时，只剩规则通道）。
+     * 不写这一条，降级结果会被当成完整结论用 —— 这比不返回更危险。
+     */
+    note: z.string().nullish().transform((v) => v ?? undefined),
+  }),
+);
 export type AnnotatedDiff = z.infer<typeof AnnotatedDiffSchema>;
 
 /** G1 只看「有结构」，不看内容质量 —— 内容靠 G2–G5 */
@@ -247,8 +342,85 @@ export const ExplainVideoPayloadSchema = z.object({
   pollUrl: z.string().nullable().default(null),
 });
 
+/**
+ * 口语评估产物。
+ *
+ * dimensions 的 id 是固定四项 —— 考试评分口径就是这四项，模型自创维度会让分数不可比。
+ * basis 记录「这次评的是什么」：录音转写、用户改过的稿、还是手打文本。
+ * 少了这一项，三天后回看报告就分不清 88 分是口语实测还是文稿评分。
+ */
+/**
+ * 节奏实测。有了它，报告上的「语速 132 词/分钟」才追得到具体数据；
+ * 没有它（手打稿 / 太短 / 解码失败）整块缺省，界面据此不显示实测区，而不是显示 0。
+ */
+export const ProsodySchema = z.object({
+  source: z.enum(['asr-words', 'asr-segments', 'vad']),
+  sourceLabel: z.string(),
+  note: z.string(),
+  durationMs: z.number().nonnegative(),
+  wordCount: z.number().nonnegative(),
+  wpm: z.number().nonnegative(),
+  articulationWpm: z.number().nonnegative(),
+  /**
+   * 语速口径。英语是「词/分钟」，日语是「モーラ/分钟」——
+   * 字段名沿用 wpm，但单位必须能说清，否则日语报告的「65」看着像出错了。
+   */
+  paceLabel: z.string().default('词/分钟'),
+  pauseCount: z.number().nonnegative(),
+  longestPauseMs: z.number().nonnegative(),
+  speechRatio: z.number().min(0).max(1),
+  leadInMs: z.number().nonnegative().default(0),
+  pauses: z.array(z.object({ startMs: z.number(), endMs: z.number() })).default([]),
+  /**
+   * 音高轮廓（整段）。日语用它算「抑扬」这一维；英语暂时不用。
+   * 只从波形上量，不指向任何词 —— アクセント要落到モーラ才判得了。
+   */
+  pitch: z
+    .object({
+      medianHz: z.number().positive(),
+      p10Hz: z.number().positive(),
+      p90Hz: z.number().positive(),
+      rangeSemitones: z.number().nonnegative(),
+      voicedRatio: z.number().min(0).max(1),
+    })
+    .optional(),
+  /** 60–220ms 的短闭塞：促音的声学候选，正常闭锁音也会计入，只作展示 */
+  closures: z.array(z.object({ startMs: z.number(), endMs: z.number() })).optional(),
+  /** pace / pausing / continuity（日语另加 pronunciation）—— 只评韵律，音素准确度这一版不评 */
+  dimensions: z.array(z.object({ id: z.string(), score: z.number(), note: z.string() })).default([]),
+  wordLevel: z.array(z.object({ word: z.string(), score: z.number(), hint: z.string().optional() })).default([]),
+});
+export type ProsodyPayload = z.infer<typeof ProsodySchema>;
+
+export const SpeakingReportSchema = z.object({
+  dimensions: z.array(
+    z.object({
+      id: z.enum(['fluency', 'grammar', 'coherence', 'lexical']),
+      score: z.number().min(0).max(100),
+      note: z.string(),
+    }),
+  ),
+  overall: z.number().min(0).max(100),
+  band: z.string().optional(),
+  suggestions: z.array(z.string()).default([]),
+  summary: z.string(),
+  basis: z
+    .object({
+      source: z.enum(['typed', 'asr', 'asr-edited']),
+      sourceLabel: z.string(),
+      transcript: z.string(),
+      durationMs: z.number().nullable().default(null),
+      audioRef: z.string().nullable().default(null),
+      phonology: z.boolean().default(false),
+    })
+    .optional(),
+  prosody: ProsodySchema.optional(),
+});
+export type SpeakingReport = z.infer<typeof SpeakingReportSchema>;
+
 export const ARTIFACT_PAYLOAD: Partial<Record<(typeof ARTIFACT_TYPES)[number], z.ZodTypeAny>> = {
   'annotated-diff': AnnotatedDiffSchema,
   'syntax-tree': SyntaxTreeSchema,
   'explain-video': ExplainVideoPayloadSchema,
+  'speaking-report': SpeakingReportSchema,
 };

@@ -23,7 +23,13 @@ import {
   resetPoolKey,
   updatePoolKey,
 } from '../services/keyPool';
-import { llmStatus, pingLlm, resolveLlmConfig, type LlmConfig } from '../services/llm';
+import {
+  lineDispatchPreview,
+  llmStatus,
+  pingLlm,
+  resolveLlmConfig,
+  type LlmConfig,
+} from '../services/llm';
 import { pingAsr, readAsrSettings, saveAsrSettings } from '../services/asr';
 import { localAsrStatus, startLocalAsr } from '../services/localAsr';
 import {
@@ -69,6 +75,8 @@ function readLlmSettings() {
     providerId: first?.providerId ?? status.providerId,
     providerName: first?.providerName ?? status.providerName,
     jsonMode: first?.jsonMode ?? status.jsonMode,
+    // 每种请求画像下各线路会怎样参与：给「线路不删但按需调度」一个可见的交代
+    dispatch: lineDispatchPreview(),
     // 只给掩码，永远不回传明文
     apiKeyMasked: first?.maskedKey ?? '',
     storage: {

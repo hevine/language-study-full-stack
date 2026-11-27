@@ -1,0 +1,352 @@
+[
+  {
+    "code": "EN-V-0791",
+    "cn": "意识；认识",
+    "mnemonic": "aware(知道的)+ness→知道的状态，「意识」。",
+    "example": "The campaign raised public awareness of water conservation.",
+    "exampleCn": "这场活动提高了公众对节约用水的意识。"
+  },
+  {
+    "code": "EN-V-0792",
+    "cn": "便宜货；讨价还价",
+    "mnemonic": "bar(棒)+gain(获得)→讨价还价才得到，「便宜货」。",
+    "example": "She bargained with the seller until the price came down.",
+    "exampleCn": "她与卖家讨价还价直到价格降下来。"
+  },
+  {
+    "code": "EN-V-0793",
+    "cn": "障碍；屏障",
+    "mnemonic": "bar(栏杆)+rier→拦住去路的东西，「障碍」。",
+    "example": "Language remains a significant barrier for many international students.",
+    "exampleCn": "语言对许多国际学生来说仍是重大障碍。"
+  },
+  {
+    "code": "EN-V-0794",
+    "cn": "光束；横梁",
+    "mnemonic": "谐音「必（beam）射」→一道「光束」射出，也指横梁。",
+    "example": "A narrow beam of light passed through the prism.",
+    "exampleCn": "一束狭窄的光穿过棱镜。"
+  },
+  {
+    "code": "EN-V-0795",
+    "cn": "事先；预先",
+    "mnemonic": "before(之前)+hand(手)→提前动手，「事先」。",
+    "example": "Participants were asked to register beforehand to avoid delays.",
+    "exampleCn": "参与者被要求事先登记以免延误。"
+  },
+  {
+    "code": "EN-V-0796",
+    "cn": "代表；利益",
+    "mnemonic": "be+half(半)→站在另一半的立场，「代表」其利益。",
+    "example": "The dean spoke on behalf of the entire faculty.",
+    "exampleCn": "院长代表全体教师发言。"
+  },
+  {
+    "code": "EN-V-0797",
+    "cn": "行为的",
+    "mnemonic": "behavior(行为)+al→与行为相关的，「行为的」。",
+    "example": "The study examined behavioral changes in children after the intervention.",
+    "exampleCn": "这项研究考察了干预后儿童的行为变化。"
+  },
+  {
+    "code": "EN-V-0798",
+    "cn": "生物多样性",
+    "mnemonic": "bio(生物)+diversity(多样性)→「生物多样性」。",
+    "example": "Tropical rainforests are renowned for their remarkable biodiversity.",
+    "exampleCn": "热带雨林以丰富的生物多样性而闻名。"
+  },
+  {
+    "code": "EN-V-0799",
+    "cn": "生物的；生物学的",
+    "mnemonic": "biology(生物学)+cal→「生物的」。",
+    "example": "The drug was tested for its biological effects on cells.",
+    "exampleCn": "这种药物经过了其对细胞的生物效应测试。"
+  },
+  {
+    "code": "EN-V-0800",
+    "cn": "突破；重大进展",
+    "mnemonic": "break(破)+through(通过)→破关而出，「突破」。",
+    "example": "The discovery was a major breakthrough in cancer research.",
+    "exampleCn": "这一发现是癌症研究的一项重大突破。"
+  },
+  {
+    "code": "EN-V-0801",
+    "cn": "繁殖；品种",
+    "mnemonic": "联想「育种」→饲养使其「繁殖」，也指「品种」。",
+    "example": "Farmers breed livestock to improve meat and milk production.",
+    "exampleCn": "农民饲养牲畜以提高肉和奶的产量。"
+  },
+  {
+    "code": "EN-V-0802",
+    "cn": "广播；播出",
+    "mnemonic": "broad(宽)+cast(投)→向四处广泛投送，「广播」。",
+    "example": "The lecture was broadcast live to students around the world.",
+    "exampleCn": "这场讲座向全世界的学生进行了现场直播。"
+  },
+  {
+    "code": "EN-V-0803",
+    "cn": "大部分；大量",
+    "mnemonic": "bul(球状)+k→一大团，「大量、大部分」。",
+    "example": "The bulk of the funding was spent on laboratory equipment.",
+    "exampleCn": "大部分经费花在了实验室设备上。"
+  },
+  {
+    "code": "EN-V-0804",
+    "cn": "官僚机构；官僚作风",
+    "mnemonic": "bureau(局)+cracy(统治)→由局衙统治，「官僚机构」。",
+    "example": "Excessive bureaucracy slowed down the approval of new research grants.",
+    "exampleCn": "过度的官僚作风拖慢了新研究经费的审批。"
+  },
+  {
+    "code": "EN-V-0805",
+    "cn": "计算；估算",
+    "mnemonic": "calcul(计算)+ation→「计算」的结果。",
+    "example": "A simple calculation showed that the estimate was too high.",
+    "exampleCn": "一个简单的计算表明这个估计过高。"
+  },
+  {
+    "code": "EN-V-0806",
+    "cn": "运河；渠道",
+    "mnemonic": "can(能)+al→能通船的水道，「运河」。",
+    "example": "The canal allows ships to bypass the long route around the cape.",
+    "exampleCn": "这条运河让船只得以绕过绕行海角的漫长航线。"
+  },
+  {
+    "code": "EN-V-0807",
+    "cn": "候选人；应试者",
+    "mnemonic": "candid(坦诚)+ate→坦诚参选的人，「候选人」。",
+    "example": "Each candidate presented a plan for improving public education.",
+    "exampleCn": "每位候选人都提出了改善公共教育的计划。"
+  },
+  {
+    "code": "EN-V-0808",
+    "cn": "胶囊；太空舱",
+    "mnemonic": "caps(盒)+ule→小盒子，「胶囊、太空舱」。",
+    "example": "The medicine comes in a capsule that dissolves in the stomach.",
+    "exampleCn": "这种药以胶囊形式提供，在胃中溶解。"
+  },
+  {
+    "code": "EN-V-0809",
+    "cn": "碳；碳元素",
+    "mnemonic": "联想汽车( car )排放的「碳」，化学元素 carbon。",
+    "example": "Burning fossil fuels releases large amounts of carbon dioxide.",
+    "exampleCn": "燃烧化石燃料会释放大量二氧化碳。"
+  },
+  {
+    "code": "EN-V-0810",
+    "cn": "载体；携带者",
+    "mnemonic": "carry(携带)+er→携带东西的人或物，「载体」。",
+    "example": "The virus uses human cells as a carrier to spread.",
+    "exampleCn": "这种病毒以人体细胞为载体进行传播。"
+  },
+  {
+    "code": "EN-V-0811",
+    "cn": "随意的；偶然的",
+    "mnemonic": "cas(落下)+ual→随手落下的，「随意的」。",
+    "example": "The professor kept a casual tone during the informal discussion.",
+    "exampleCn": "教授在非正式讨论中保持了随意的语气。"
+  },
+  {
+    "code": "EN-V-0812",
+    "cn": "目录；编目",
+    "mnemonic": "cata(向下)+log(说)→逐条说出，「目录」。",
+    "example": "The library catalog lists every book by title and author.",
+    "exampleCn": "图书馆目录按书名和作者列出每本书。"
+  },
+  {
+    "code": "EN-V-0813",
+    "cn": "细胞的；蜂窝的",
+    "mnemonic": "cell(细胞)+ular→「细胞的」，也指蜂窝状的。",
+    "example": "Cellular respiration converts nutrients into usable energy for the body.",
+    "exampleCn": "细胞呼吸把营养物质转化为身体可用的能量。"
+  },
+  {
+    "code": "EN-V-0814",
+    "cn": "水泥；巩固",
+    "mnemonic": "联想「水泥」把砖黏合，引申为「巩固」关系。",
+    "example": "Workers mixed cement with sand and water for the foundation.",
+    "exampleCn": "工人把水泥与沙和水混合用于地基。"
+  },
+  {
+    "code": "EN-V-0815",
+    "cn": "人口普查",
+    "mnemonic": "cens(评估)+us→评估全国人口，「人口普查」。",
+    "example": "The national census is conducted once every ten years.",
+    "exampleCn": "全国人口普查每十年进行一次。"
+  },
+  {
+    "code": "EN-V-0816",
+    "cn": "认证；证书",
+    "mnemonic": "cert(确定)+ification→确认资格，「认证」。",
+    "example": "The company requires certification from all its suppliers.",
+    "exampleCn": "这家公司要求所有供应商提供认证。"
+  },
+  {
+    "code": "EN-V-0817",
+    "cn": "议院；议事厅",
+    "mnemonic": "chamber 意为「房间」，议事之室即「议院」。",
+    "example": "The bill passed both chambers of the legislature last month.",
+    "exampleCn": "这项法案上月通过了立法机构的两个议院。"
+  },
+  {
+    "code": "EN-V-0818",
+    "cn": "慈善；慈善机构",
+    "mnemonic": "char(爱)+ity→出于爱而给予，「慈善」。",
+    "example": "Students donated books and clothes to a local charity.",
+    "exampleCn": "学生把书和衣服捐给了当地一家慈善机构。"
+  },
+  {
+    "code": "EN-V-0819",
+    "cn": "慢性的；长期的",
+    "mnemonic": "chron(时间)+ic→时间拖得长，「慢性的」；反 acute。",
+    "example": "Chronic illness often requires long-term care and medication.",
+    "exampleCn": "慢性病往往需要长期照料和药物治疗。"
+  },
+  {
+    "code": "EN-V-0820",
+    "cn": "循环；流通",
+    "mnemonic": "circ(圆)+ulate→绕圈流动，「循环」。",
+    "example": "Blood circulates through the body, delivering oxygen to tissues.",
+    "exampleCn": "血液在体内循环，向组织输送氧气。"
+  },
+  {
+    "code": "EN-V-0821",
+    "cn": "引用；引证",
+    "mnemonic": "cit(召唤)+e→召唤权威之言，「引用」。",
+    "example": "Remember to cite every source you use in your paper.",
+    "exampleCn": "记得在论文中引用你使用的每一份资料。"
+  },
+  {
+    "code": "EN-V-0822",
+    "cn": "平民；民间的",
+    "mnemonic": "civil(公民)+ian→普通公民，「平民」。",
+    "example": "The evacuation plan prioritized civilians over military personnel.",
+    "exampleCn": "疏散计划把平民置于军人之前优先考虑。"
+  },
+  {
+    "code": "EN-V-0823",
+    "cn": "澄清；说明",
+    "mnemonic": "clar(清楚)+ification→使清楚，「澄清」。",
+    "example": "The professor offered a clarification after several students asked questions.",
+    "exampleCn": "几名学生提问后，教授作了进一步说明。"
+  },
+  {
+    "code": "EN-V-0824",
+    "cn": "黏土；泥土",
+    "mnemonic": "c+lay(躺)→可随意塑形的「黏土」。",
+    "example": "Ancient pottery was shaped from clay and fired in kilns.",
+    "exampleCn": "古代陶器由黏土塑形后在窑中烧制。"
+  },
+  {
+    "code": "EN-V-0825",
+    "cn": "临床的；客观的",
+    "mnemonic": "clinic(诊所)+al→与诊所诊疗相关，「临床的」。",
+    "example": "The new drug showed promising results in clinical trials.",
+    "exampleCn": "这种新药在临床试验中显示出可喜的结果。"
+  },
+  {
+    "code": "EN-V-0826",
+    "cn": "星团；聚集",
+    "mnemonic": "clust(团)+er→聚成一团，「星团、聚集」。",
+    "example": "Astronomers observed a cluster of galaxies billions of light-years away.",
+    "exampleCn": "天文学家观测到数十亿光年外的一个星系团。"
+  },
+  {
+    "code": "EN-V-0827",
+    "cn": "联盟；联合",
+    "mnemonic": "co(一起)+alit→联合起来，「联盟」。",
+    "example": "A coalition of environmental groups pushed for stricter regulations.",
+    "exampleCn": "一个环保组织联盟推动更严格的法规。"
+  },
+  {
+    "code": "EN-V-0828",
+    "cn": "沿海的；海岸的",
+    "mnemonic": "coast(海岸)+al→「沿海的」。",
+    "example": "Coastal cities face growing risks from rising sea levels.",
+    "exampleCn": "沿海城市面临海平面上升带来的日益增加的风险。"
+  },
+  {
+    "code": "EN-V-0830",
+    "cn": "合作；协作",
+    "mnemonic": "co(一起)+labor(劳动)+ate→一起劳动，「合作」。",
+    "example": "Researchers from two universities collaborated on the climate study.",
+    "exampleCn": "两所大学的研究者在气候研究上展开合作。"
+  },
+  {
+    "code": "EN-V-0831",
+    "cn": "集体的；共同的",
+    "mnemonic": "collect(收集)+ive→收集在一起的，「集体的」。",
+    "example": "The project succeeded through the collective effort of the whole team.",
+    "exampleCn": "这个项目靠全体团队的共同努力才得以成功。"
+  },
+  {
+    "code": "EN-V-0832",
+    "cn": "燃烧",
+    "mnemonic": "com+bust(烧)+ion→「燃烧」的过程。",
+    "example": "Combustion of fossil fuels releases carbon dioxide into the atmosphere.",
+    "exampleCn": "化石燃料的燃烧把二氧化碳释放到大气中。"
+  },
+  {
+    "code": "EN-V-0833",
+    "cn": "评论；解说",
+    "mnemonic": "comment(评论)+ary→「评论、解说」。",
+    "example": "The textbook includes a brief commentary on each historical source.",
+    "exampleCn": "这本教科书对每份历史史料都附有简短的评论。"
+  },
+  {
+    "code": "EN-V-0834",
+    "cn": "委员会；委托",
+    "mnemonic": "com+miss(送)+ion→派人去办，「委托」，也指「委员会」。",
+    "example": "The commission was established to investigate the cause of the accident.",
+    "exampleCn": "该委员会是为调查事故原因而设立的。"
+  },
+  {
+    "code": "EN-V-0835",
+    "cn": "承诺；投入",
+    "mnemonic": "commit(承诺)+ment→许下诺言并「投入」。",
+    "example": "Her commitment to the research never wavered, even after setbacks.",
+    "exampleCn": "即使遭遇挫折，她对研究的投入从未动摇。"
+  },
+  {
+    "code": "EN-V-0836",
+    "cn": "交流；沟通",
+    "mnemonic": "commun(共同)+ication→使彼此相通，「交流」。",
+    "example": "Clear communication is essential for effective teamwork in the lab.",
+    "exampleCn": "清晰的沟通对实验室里的有效团队合作至关重要。"
+  },
+  {
+    "code": "EN-V-0837",
+    "cn": "可比的；类似的",
+    "mnemonic": "compare(比较)+able→能拿来比较的，「可比的」。",
+    "example": "The two groups were comparable in age and background.",
+    "exampleCn": "这两组在年龄和背景上具有可比性。"
+  },
+  {
+    "code": "EN-V-0838",
+    "cn": "比较的；相对的",
+    "mnemonic": "compare(比较)+ative→「比较的、相对的」。",
+    "example": "The course takes a comparative approach to world literatures.",
+    "exampleCn": "这门课采用比较的方法来研究世界文学。"
+  },
+  {
+    "code": "EN-V-0839",
+    "cn": "能力；胜任",
+    "mnemonic": "com+pet(追求)+ence→追求到位的能力，「能力」。",
+    "example": "The exam measures students' competence in written and spoken English.",
+    "exampleCn": "这次考试衡量学生的英语书面和口语能力。"
+  },
+  {
+    "code": "EN-V-0840",
+    "cn": "竞争的；有竞争力的",
+    "mnemonic": "compete(竞争)+itive→「竞争的、有竞争力的」。",
+    "example": "The job market for graduates is becoming increasingly competitive.",
+    "exampleCn": "毕业生面临的就业市场竞争越来越激烈。"
+  },
+  {
+    "code": "EN-V-0841",
+    "cn": "复杂性",
+    "mnemonic": "complex(复杂)+ity→复杂的程度，「复杂性」。",
+    "example": "The complexity of the climate system makes precise prediction difficult.",
+    "exampleCn": "气候系统的复杂性使精确预测变得困难。"
+  }
+]

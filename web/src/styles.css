@@ -10691,14 +10691,18 @@ p {
 }
 
 /* ============================================================
-   Lingua Studio · AI 学习台（三栏工作台）
-   上下文 / 执行过程 / 产物 同屏，模仿编码 Agent 的工作台形态。
-   三栏各自滚动，整页不滚 —— 边跑边看时页面跳动最影响判断。
+   Lingua Studio · AI 学习台（单栏纵向流 · 首页形态）
+   今天的安排 → 输入 → 它怎么动手 → 产物 → 采纳
+
+   为什么不是三栏：输入 / 执行 / 产物是时间上依次发生的三个阶段，
+   并列会永远空着 1–2 栏，还把最该宽的产物挤窄。纵向一条流贴合阅读动线，
+   产物拿全宽，长句 diff 与句法树不再折行。
+   过程收成一条可折叠的摘要条（带 Lingua CI 徽章），按需展开。
    ============================================================ */
 
 .main-wide {
-  max-width: 1720px;
-  padding-bottom: 28px;
+  max-width: 1180px;
+  padding-bottom: 56px;
 }
 
 .studio {
@@ -10707,38 +10711,940 @@ p {
   --studio-line-soft: rgba(20, 40, 80, 0.055);
   display: flex;
   flex-direction: column;
+  gap: 18px;
+  /* 单栏的舒适阅读宽度：再宽，diff 卡片一行超过 80 字就开始难读了 */
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+  padding-top: 6px;
+}
+
+/* ---------- 顶部：今天是什么日子 ---------- */
+
+.studio-hero-eyebrow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11.5px;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.studio-hero-sep {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+}
+
+.studio-hero-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
   gap: 16px;
-  min-height: calc(100vh - 96px);
+  flex-wrap: wrap;
 }
 
-.studio-page-head {
-  margin-bottom: 0;
+.studio-hero-title {
+  font-size: 29px;
+  font-weight: 680;
+  letter-spacing: -0.03em;
+  line-height: 1.28;
 }
 
-.studio-head-chips {
+.studio-hero-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-bottom: 4px;
+}
+
+.studio-hero-sub {
+  margin-top: 9px;
+  max-width: 640px;
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--muted);
+}
+
+/* ---------- 今天该做什么：三块数字 ---------- */
+
+.studio-today {
+  display: grid;
+  /* 自动折行而不是写死三列：窄屏时三块数字不该变成三座高塔 */
+  grid-template-columns: repeat(auto-fit, minmax(224px, 1fr));
+  gap: 12px;
+}
+
+.studio-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 15px 17px 13px;
+  border-radius: 22px;
+  border: 1px solid var(--glass-line);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.48));
+  box-shadow: var(--glass-edge), var(--shadow);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(175%);
+  backdrop-filter: blur(var(--blur)) saturate(175%);
+  color: inherit;
+  text-decoration: none;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+a.studio-tile:hover {
+  transform: translateY(-2px);
+  border-color: rgba(var(--accent-rgb), 0.3);
+  box-shadow: var(--glass-edge), 0 20px 40px -28px rgba(12, 24, 48, 0.6);
+}
+
+.studio-tile-k {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.studio-tile-v {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 26px;
+  font-weight: 660;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+.studio-tile-v em {
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.studio-tile-n {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.studio-tile-go {
+  margin-top: auto;
+  padding-top: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-deep);
+}
+
+.studio-tile-go.is-quiet {
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.studio-tile.is-static {
+  cursor: default;
+}
+
+/* ---------- 输入：首页唯一的主输入 ---------- */
+
+.studio-composer {
+  padding: 0;
+  overflow: hidden;
+  transition: border-color 0.22s ease, box-shadow 0.22s ease;
+}
+
+/* 聚焦时整块卡片亮起来：让人知道「现在该在这里打字」 */
+.studio-composer:focus-within {
+  border-color: rgba(var(--accent-rgb), 0.34);
+  box-shadow: var(--glass-edge), 0 26px 60px -40px rgba(var(--accent-rgb), 0.85);
+}
+
+.studio-composer-main {
+  padding: 15px 18px 0;
+}
+
+.studio-composer-input {
+  display: block;
+  width: 100%;
+  min-height: 86px;
+  max-height: 340px;
+  border: 0;
+  background: transparent;
+  resize: none;
+  outline: none;
+  font-family: inherit;
+  font-size: 15.5px;
+  line-height: 1.75;
+  color: var(--ink);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.studio-composer-input::placeholder {
+  color: var(--muted);
+  opacity: 0.88;
+}
+
+/* ---------- 口语输入：录一段 / 导录音笔 / 纯文本 ---------- */
+
+.studio-composer-speech {
+  padding: 4px 18px 12px;
+}
+
+.speech-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--studio-line-soft);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.speech-bar.is-recording {
+  border-color: rgba(216, 62, 62, 0.34);
+  background: rgba(216, 62, 62, 0.06);
+}
+
+.speech-bar-main {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.studio-grid {
-  display: grid;
-  grid-template-columns: 306px minmax(0, 1fr) minmax(0, 1.12fr);
-  gap: 16px;
-  flex: 1;
-  min-height: 0;
+.speech-rec,
+.speech-upload {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--accent-rgb), 0.26);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--accent-deep);
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
 }
 
-.studio-col {
+.speech-rec:hover:not(:disabled),
+.speech-upload:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.speech-rec:disabled,
+.speech-upload:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.speech-upload {
+  color: var(--ink-soft);
+  border-color: var(--studio-line);
+  font-weight: 500;
+}
+
+.speech-rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 3px rgba(216, 62, 62, 0.14);
+  flex-shrink: 0;
+}
+
+.speech-rec.is-live {
+  background: rgba(216, 62, 62, 0.1);
+  border-color: rgba(216, 62, 62, 0.42);
+  color: var(--danger);
+}
+
+.speech-rec.is-live .speech-rec-dot {
+  animation: speech-blink 1s ease-in-out infinite;
+}
+
+.speech-rec.is-live b {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes speech-blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.speech-meter {
+  width: 120px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(20, 40, 80, 0.1);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.speech-meter i {
+  display: block;
+  height: 100%;
+  transform-origin: left center;
+  background: linear-gradient(90deg, var(--ok), var(--accent));
+  transition: transform 0.12s linear;
+}
+
+.speech-hint {
+  flex: 1 1 240px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.speech-file {
+  display: none;
+}
+
+.speech-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.speech-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid rgba(var(--accent-rgb), 0.24);
+  border-top-color: var(--accent);
+  animation: speech-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes speech-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.speech-audio {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--studio-line-soft);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.speech-audio-tag {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.speech-audio-name {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.speech-audio-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.speech-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(216, 62, 62, 0.08);
+  color: var(--danger);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.speech-error-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* ---------- 口语评估产物 ---------- */
+
+.speak-pane {
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-  height: clamp(520px, calc(100vh - 232px), 940px);
+  gap: 14px;
 }
 
-.studio-col-head {
+.speak-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.speak-score {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.speak-score strong {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.speak-basis {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.speak-summary {
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.8;
+  color: var(--ink);
+}
+
+.speak-caveat {
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: rgba(214, 152, 28, 0.12);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--ink-soft);
+}
+
+.speak-dims {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.speak-dim {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) 36px;
+  align-items: center;
+  gap: 10px;
+}
+
+.speak-dim-name {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.speak-dim-bar {
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(20, 40, 80, 0.09);
+  overflow: hidden;
+}
+
+.speak-dim-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-light), var(--accent-deep));
+}
+
+.speak-dim-score {
+  font-size: 13px;
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.speak-dim-note {
+  grid-column: 2 / -1;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.speak-notes-toggle {
+  align-self: flex-start;
+}
+
+/* ---------- 节奏实测 ----------
+   与上面四个维度分开成一张浅底小卡：那四个是模型读稿判断的，
+   这四个数是设备量出来的，视觉上不该混在一起。
+   柱子用青色而不是主色渐变 —— 用户一眼能看出「这是另一套指标」。 */
+
+.speak-prosody {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid var(--studio-line-soft);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.speak-prosody-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.speak-prosody-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+
+.speak-stats {
+  display: grid;
+  /* 自动折行：窄屏时四块数字不该挤成一条 */
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.speak-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.speak-stat strong {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+.speak-stat span {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.speak-rhythm-dims {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.speak-rhythm-dim {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 10px;
+}
+
+.speak-rhythm-name {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.speak-rhythm-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(20, 40, 80, 0.09);
+  overflow: hidden;
+}
+
+.speak-rhythm-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #7cc4bc, #2f8f86);
+}
+
+.speak-rhythm-score {
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.speak-rhythm-note {
+  grid-column: 2 / -1;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.speak-flags {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.speak-flag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.speak-flag {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(206, 150, 40, 0.13);
+  color: #8a5a10;
+  font-size: 12px;
+}
+
+.speak-prosody-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.speak-prosody-limit {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  opacity: 0.86;
+}
+
+.speak-advice {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--studio-line-soft);
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.speak-advice-title {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.speak-advice ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.speak-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(20, 40, 80, 0.035);
+}
+
+.speak-transcript-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.speak-transcript p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.85;
+  color: var(--ink-soft);
+  white-space: pre-wrap;
+}
+
+.studio-composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px 12px;
+}
+
+.studio-scenes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.studio-scene {
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 5px 11px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.studio-scene:hover:not(:disabled) {
+  border-color: rgba(var(--accent-rgb), 0.3);
+  color: var(--accent-deep);
+}
+
+.studio-scene.is-on {
+  background: linear-gradient(170deg, var(--accent-light), var(--accent-deep));
+  border-color: rgba(255, 255, 255, 0.5);
+  color: #fff;
+  box-shadow: var(--accent-glow);
+}
+
+.studio-scene:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.studio-composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.studio-level {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.studio-select {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.92);
+  background-color: rgba(255, 255, 255, 0.68);
+  background-image: url("data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b7a90' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  border-radius: 11px;
+  padding: 6px 24px 6px 10px;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  outline: none;
+  cursor: pointer;
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.studio-select:hover {
+  border-color: rgba(var(--accent-rgb), 0.28);
+}
+
+.studio-select:focus {
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+
+.studio-select.is-wide {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 26px 7px 11px;
+  font-size: 13px;
+}
+
+.studio-send {
+  gap: 7px;
+  padding: 9px 18px;
+}
+
+.studio-send-key {
+  font-size: 10.5px;
+  opacity: 0.62;
+  letter-spacing: 0;
+  font-variant-numeric: normal;
+}
+
+.studio-composer-extra {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 18px 10px;
+  font-size: 12.5px;
+}
+
+.studio-composer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 18px 9px;
+  border-top: 1px solid var(--studio-line-soft);
+  background: rgba(255, 255, 255, 0.26);
+}
+
+/* ---------- 执行过程：折叠成一行 ---------- */
+
+.studio-strip {
+  overflow: hidden;
+}
+
+.studio-strip-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 16px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.18s ease;
+}
+
+.studio-strip-head:hover {
+  background: rgba(255, 255, 255, 0.36);
+}
+
+.studio-strip-dot {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.studio-strip-dot.is-running {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+  animation: studio-pulse 1.4s ease-in-out infinite;
+}
+
+.studio-strip-dot.is-done {
+  background: var(--ok);
+}
+
+.studio-strip-dot.is-done.is-bad,
+.studio-strip-dot.is-error {
+  background: var(--danger);
+}
+
+.studio-strip-dot.is-clarify {
+  background: var(--gold);
+}
+
+.studio-strip-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.studio-strip-title {
+  font-size: 14px;
+  font-weight: 620;
+}
+
+.studio-strip-sub {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 五关徽章：折叠状态下也要一眼看出「凭什么信它」 */
+.studio-strip-gates {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.studio-strip-gates i {
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 7px;
+  border: 1px solid var(--studio-line);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--muted);
+}
+
+.studio-strip-gates i.is-pass {
+  color: var(--ok);
+  border-color: rgba(18, 133, 76, 0.24);
+  background: rgba(18, 133, 76, 0.08);
+}
+
+.studio-strip-gates i.is-fail {
+  color: var(--danger);
+  border-color: rgba(207, 59, 59, 0.26);
+  background: rgba(207, 59, 59, 0.09);
+}
+
+.studio-strip-caret {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-deep);
+}
+
+.studio-strip-body {
+  padding: 8px 18px 22px;
+  border-top: 1px solid var(--studio-line-soft);
+}
+
+/* 展开后不再重复一遍「执行完成 · N 步」——摘要条已经说过了 */
+.studio-strip-body .run-head {
+  display: none;
+}
+
+/* 单栏变宽后，步骤耗时贴到标题右边；跟着 space-between 跑到 800px 外反而看不出对应关系 */
+.studio-strip-body .run-step-head {
+  justify-content: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.studio-strip-conf {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gold);
+  background: rgba(206, 150, 40, 0.12);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+/* ---------- 产物：全宽 ---------- */
+
+.studio-result {
+  overflow: hidden;
+  scroll-margin-top: 18px;
+}
+
+.studio-result-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -10749,105 +11655,107 @@ p {
   letter-spacing: 0.08em;
   color: var(--ink-soft);
   border-bottom: 1px solid var(--studio-line-soft);
-  flex-shrink: 0;
 }
 
-.studio-col-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 16px 18px 18px;
-  scrollbar-width: thin;
-}
-
-.studio-col-body::-webkit-scrollbar {
-  width: 8px;
-}
-
-.studio-col-body::-webkit-scrollbar-thumb {
-  background: rgba(20, 40, 80, 0.14);
-  border-radius: 999px;
-}
-
-/* ---------- 左栏：上下文 ---------- */
-
-.studio-block {
-  margin-bottom: 18px;
-}
-
-.studio-block:last-child {
-  margin-bottom: 0;
-}
-
-.studio-block-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.studio-chips {
+.studio-result-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.studio-chip {
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  background: rgba(255, 255, 255, 0.6);
-  color: var(--ink-soft);
+.studio-result-tab {
+  border: 1px solid var(--studio-line);
+  background: rgba(255, 255, 255, 0.5);
   border-radius: 999px;
-  padding: 5px 11px;
-  font-size: 12.5px;
-  line-height: 1.5;
-  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+  padding: 3px 10px;
+  font-size: 11.5px;
+  color: var(--muted);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.studio-chip:hover:not(:disabled) {
-  border-color: rgba(var(--accent-rgb), 0.3);
+.studio-result-tab.is-on {
+  background: var(--accent-soft);
+  border-color: rgba(var(--accent-rgb), 0.26);
   color: var(--accent-deep);
+  font-weight: 600;
 }
 
-.studio-chip.is-on {
-  background: linear-gradient(170deg, var(--accent-light), var(--accent-deep));
-  border-color: rgba(255, 255, 255, 0.5);
-  color: #fff;
-  box-shadow: var(--accent-glow);
+.studio-result-body {
+  padding: 18px;
 }
 
-.studio-chip:disabled {
-  opacity: 0.42;
-  cursor: not-allowed;
+/* ---------- 空态：三种产物长什么样 ---------- */
+
+.studio-start-head,
+.studio-recent-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
 }
 
-.studio-scene-hint {
-  margin-top: 8px;
+.studio-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(224px, 1fr));
+  gap: 12px;
 }
 
-.studio-textarea {
-  resize: vertical;
-  min-height: 120px;
-  line-height: 1.7;
-  margin-bottom: 6px;
-}
-
-.studio-field {
+.studio-quick {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-top: 12px;
+  align-items: flex-start;
+  padding: 15px 16px 13px;
+  border-radius: 20px;
+  border: 1px dashed var(--studio-line);
+  background: rgba(255, 255, 255, 0.42);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.studio-quick:hover:not(:disabled) {
+  transform: translateY(-2px);
+  border-style: solid;
+  border-color: rgba(var(--accent-rgb), 0.3);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.studio-quick:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.studio-quick-title {
+  font-size: 14px;
+  font-weight: 620;
+}
+
+.studio-quick-desc {
   font-size: 12.5px;
+  line-height: 1.65;
   color: var(--muted);
 }
 
-.studio-actions {
-  margin: 4px 0 18px;
+.studio-quick-out {
+  margin-top: auto;
+  padding-top: 8px;
+  font-size: 11.5px;
+  color: var(--accent-deep);
 }
 
-.studio-history ul {
+/* ---------- 最近 ---------- */
+
+.studio-recent ul {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -10856,27 +11764,28 @@ p {
   gap: 4px;
 }
 
-.studio-history button {
+.studio-recent button {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 9px;
-  border-radius: 12px;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 14px;
   border: 1px solid transparent;
   background: rgba(255, 255, 255, 0.42);
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--ink-soft);
   text-align: left;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
 }
 
-.studio-history button:hover {
+.studio-recent button:hover {
   border-color: rgba(var(--accent-rgb), 0.2);
   background: rgba(255, 255, 255, 0.72);
   color: var(--accent-deep);
 }
 
-.studio-history-scene {
+.studio-recent-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -10884,28 +11793,51 @@ p {
   white-space: nowrap;
 }
 
-.studio-history-dot {
+.studio-recent-dot {
+  flex-shrink: 0;
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--ok);
-  flex-shrink: 0;
 }
 
-.studio-history-dot.is-bad {
+.studio-recent-dot.is-bad {
   background: var(--danger);
 }
 
-/* ---------- 中栏：执行过程 ---------- */
-
-.studio-live {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft);
-  animation: studio-pulse 1.4s ease-in-out infinite;
+.studio-recent-tag {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(18, 133, 76, 0.1);
+  color: var(--ok);
+  font-size: 10.5px;
 }
+
+/* ---------- 页脚：把「不会自动保存」这条契约写在最后一行 ---------- */
+
+.studio-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 4px 2px 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.studio-foot-link {
+  color: var(--accent-deep);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.studio-foot-link:hover {
+  text-decoration: underline;
+}
+
+/* ---------- 执行过程内部（RunTimeline 原样复用） ---------- */
 
 @keyframes studio-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
@@ -11193,37 +12125,7 @@ p {
   opacity: 0.75;
 }
 
-/* ---------- 右栏：产物 ---------- */
-
-.studio-art-body {
-  padding: 16px 18px 20px;
-}
-
-.studio-art-tabs {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.studio-art-tab {
-  border: 1px solid var(--studio-line);
-  background: rgba(255, 255, 255, 0.5);
-  border-radius: 999px;
-  padding: 3px 10px;
-  font-size: 11.5px;
-  color: var(--muted);
-  max-width: 190px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.studio-art-tab.is-on {
-  background: var(--accent-soft);
-  border-color: rgba(var(--accent-rgb), 0.26);
-  color: var(--accent-deep);
-  font-weight: 600;
-}
+/* ---------- 产物渲染器共用的容器 ---------- */
 
 /* 写作批改 */
 
@@ -11659,42 +12561,54 @@ p {
 
 /* ---------- 自适应 ---------- */
 
-@media (max-width: 1400px) {
-  .studio-grid {
-    grid-template-columns: 280px minmax(0, 1fr) minmax(0, 1fr);
-  }
-}
-
+/* 单栏在笔记本宽度上反而不该被 max-width 掐窄：让 main 自己撑满 */
 @media (max-width: 1180px) {
-  .studio-grid {
-    grid-template-columns: 268px minmax(0, 1fr);
-  }
-
-  .studio-col {
-    height: auto;
-    max-height: none;
-  }
-
-  .studio-grid > .studio-col:last-child {
-    grid-column: 1 / -1;
-  }
-
-  .studio-col-body {
-    max-height: 60vh;
+  .main-wide {
+    max-width: 100%;
   }
 }
 
-@media (max-width: 860px) {
-  .studio-grid {
-    grid-template-columns: minmax(0, 1fr);
+@media (max-width: 900px) {
+  .studio-hero-title {
+    font-size: 23px;
   }
 
-  .studio-grid > .studio-col:last-child {
-    grid-column: auto;
+  .studio-composer-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .studio-composer-actions {
+    margin-left: 0;
+    justify-content: space-between;
+  }
+
+  .studio-strip-gates {
+    display: none;
   }
 
   .run-digest-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 620px) {
+  .studio {
+    gap: 14px;
+  }
+
+  .studio-tile-v {
+    font-size: 22px;
+  }
+
+  .studio-result-body,
+  .studio-strip-body {
+    padding-left: 13px;
+    padding-right: 13px;
+  }
+
+  .studio-strip-caret {
+    display: none;
   }
 }
 
@@ -11711,4 +12625,109 @@ p {
 
 a.btn {
   text-decoration: none;
+}
+
+/* ---------- 语法库（/grammar）：复用分级词库的 level-card / lib-word 骨架 ---------- */
+.grammar-head {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.grammar-head:focus-visible {
+  outline: 2px solid rgba(var(--accent-rgb), 0.5);
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+
+.grammar-caret {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  transition: transform 0.18s ease;
+}
+
+.grammar-caret.is-open {
+  transform: rotate(180deg);
+}
+
+/* 详情：左列是字段名，右列是内容；同一行里不再塞别的 */
+.grammar-detail,
+.grammar-line,
+.grammar-refs {
+  display: grid;
+  grid-template-columns: 3em minmax(0, 1fr);
+  gap: 12px;
+  font-size: 13px;
+  line-height: 1.75;
+  align-items: baseline;
+}
+
+.grammar-detail {
+  margin: 10px 0 4px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.grammar-line,
+.grammar-refs {
+  margin-top: 4px;
+}
+
+.grammar-refs {
+  margin-top: 10px;
+}
+
+.grammar-k {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.grammar-example {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.grammar-ref-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* 文字按钮：跳转到规则 / 语法点，看起来像链接而不是按钮 */
+.grammar-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-deep);
+  font: inherit;
+  font-size: inherit;
+  text-decoration: underline;
+  text-decoration-color: rgba(var(--accent-rgb), 0.35);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.grammar-link:hover {
+  text-decoration-color: currentColor;
+}
+
+.grammar-link:focus-visible {
+  outline: 2px solid rgba(var(--accent-rgb), 0.5);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* 语法库的行没有右侧栏，主列要撑满整行，展开箭头才落在行末 */
+.grammar-row > .lib-word-main {
+  flex: 1;
+  min-width: 0;
 }

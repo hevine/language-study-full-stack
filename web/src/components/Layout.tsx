@@ -5,14 +5,17 @@ import { THEMES } from '@waiyubaodian/ui-kit/theme';
 import NavIcon, { type NavIconName } from './NavIcon';
 import SidebarHub from './SidebarHub';
 
+// 顺序即权重：AI 学习台是首页（每天打开的那一屏），概览与任务退到其后
 const NAV: Array<{ to: string; label: string; icon: NavIconName }> = [
-  { to: '/', label: '今日概览', icon: 'overview' },
   { to: '/studio', label: 'AI 学习台', icon: 'studio' },
+  { to: '/dashboard', label: '今日概览', icon: 'overview' },
+  { to: '/loop', label: '学习闭环', icon: 'today' },
   { to: '/today', label: '今日任务', icon: 'today' },
   { to: '/path', label: '学习之路', icon: 'path' },
   { to: '/practice', label: '写作·口语', icon: 'practice' },
   { to: '/plan', label: '学习计划', icon: 'plan' },
   { to: '/vocab', label: '词汇本', icon: 'vocab' },
+  { to: '/grammar', label: '语法库', icon: 'grammar' },
   { to: '/exams', label: '升级自测', icon: 'exam' },
   { to: '/listening', label: '听力素材', icon: 'listen' },
   { to: '/media-player', label: '播放器演示', icon: 'media' },
@@ -23,7 +26,7 @@ const NAV: Array<{ to: string; label: string; icon: NavIconName }> = [
 export default function Layout({ children }: { children: ReactNode }) {
   const { theme, setTheme, resetTheme, autoTheme, switching, catalog } = useApp();
   const location = useLocation();
-  // 工作台是三栏同屏，1140px 会挤成一栏，需要放宽内容区
+  // 工作台是首页形态的单栏流，内容区比默认更宽一点（产物要拿全宽）
   const wide = location.pathname.startsWith('/studio');
   const switchingName = switching
     ? catalog?.languages.find((item) => item.id === switching)?.nativeName ?? switching

@@ -76,3 +76,108 @@ export function route(
   const chosen = scenes.find((scene) => scene.id === top.id) ?? null;
   return { scene: chosen, confidence: top.score, candidates: ranked.slice(0, 4) };
 }
+
+// ---------------------------------------------------------------------------
+// 多意图路由：把输入切成 segments，每个 segment 独立打分
+// ---------------------------------------------------------------------------
+
+const SPLIT_WORDS = ['另外', '还有', '帮我', '然后', '接着', '同时', 'besides', 'also', 'then'];
+
+function splitSegments(input: string): string[] {
+  if (!input.trim()) return [];
+
+  // 长文本（>200 字）按段落分
+  if (input.length > 200) {
+    return input
+      .split(/\n+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  // 短文本按信号词分
+  let segments: string[] = [input];
+  for (const word of SPLIT_WORDS) {
+    const next: string[] = [];
+    for (const seg of segments) {
+      const parts = seg.split(word);
+      next.push(...parts.map((p) => p.trim()).filter(Boolean));
+    }
+    segments = next;
+  }
+
+  // 如果分割后只有一段，按标点再试一次
+  if (segments.length === 1) {
+    const byPunct = input.split(/[。！？.!?;；]/).map((s) => s.trim()).filter(Boolean);
+    if (byPunct.length > 1) segments = byPunct;
+  }
+
+  return segments.length > 0 ? segments : [input];
+}
+
+export interface MultiRouteResult {
+  matches: Array<{ scene: ScenePack; confidence: number; inputSegment: string }>;
+  unmatched: string;
+  clarify?: string;
+}
+
+export function routeMulti(
+  input: { query?: string; text?: string; scene?: string; mode: string },
+  scenes: ScenePack[],
+): MultiRouteResult {
+  // 显式指定场景时直接返回单场景
+  if (input.scene) {
+    const scene = scenes.find((s) => s.id === input.scene);
+    if (scene) {
+      return {
+        matches: [{ scene, confidence: 1, inputSegment: input.text ?? input.query ?? '' }],
+        unmatched: '',
+      };
+    }
+  }
+
+  const fullText = (input.text ?? input.query ?? '').trim();
+  if (!fullText) {
+    return { matches: [], unmatched: '', clarify: '请输入要学习的内容' };
+  }
+
+  const segments = splitSegments(fullText);
+  const matches: MultiRouteResult['matches'] = [];
+  let unmatched = '';
+
+  for (const segment of segments) {
+    const result = route({ ...input, text: segment, scene: undefined }, scenes);
+    if (result.scene && result.confidence >= CLARIFY_THRESHOLD) {
+      // 去重：同一场景只保留最高分的 segment
+      const existing = matches.find((m) => m.scene.id === result.scene!.id);
+      if (existing) {
+        if (result.confidence > existing.confidence) {
+          existing.confidence = result.confidence;
+          existing.inputSegment = segment;
+        }
+      } else {
+        matches.push({
+          scene: result.scene,
+          confidence: result.confidence,
+          inputSegment: segment,
+        });
+      }
+    } else {
+      unmatched = unmatched ? `${unmatched} ${segment}` : segment;
+    }
+  }
+
+  // 取 top-2
+  matches.sort((a, b) => b.confidence - a.confidence);
+  const top2 = matches.slice(0, 2);
+
+  if (top2.length === 0) {
+    return {
+      matches: [],
+      unmatched: fullText,
+      clarify:
+        '我还判断不出你要做什么。可以说得具体点，比如「按雅思标准改这篇作文」或「帮我分析这个长难句」。',
+    };
+  }
+
+  return { matches: top2, unmatched };
+}

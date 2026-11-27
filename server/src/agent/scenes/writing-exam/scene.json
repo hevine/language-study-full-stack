@@ -3,7 +3,10 @@
   "title": "考试写作批改",
   "version": "0.1.0",
   "category": "writing",
-  "modes": ["ask", "craft"],
+  "modes": [
+    "ask",
+    "craft"
+  ],
   "match": {
     "examples": [
       "帮我改这篇作文",
@@ -12,14 +15,47 @@
       "批改一下我的写作",
       "这篇作文有什么问题"
     ],
-    "signals": ["有作文正文", "提到考试名", "提到分数"]
+    "signals": [
+      "有作文正文",
+      "提到考试名",
+      "提到分数"
+    ]
   },
-  "tools": ["profile.read", "exam.rubric", "gra.rules", "write.diff_review", "profile.patch"],
-  "artifacts": ["annotated-diff", "score-report"],
-  "budget": { "maxSteps": 6, "maxTokens": 12000, "tts": false },
+  "tools": [
+    "profile.read",
+    "exam.rubric",
+    "gra.rules",
+    "write.diff_review",
+    "profile.patch"
+  ],
+  "artifacts": [
+    "annotated-diff",
+    "score-report"
+  ],
+  "budget": {
+    "maxSteps": 6,
+    "maxTokens": 12000,
+    "tts": false
+  },
   "lang": {
-    "requires": ["tokenize", "syntax", "errorTaxonomy", "levelScale"],
-    "exams": { "en": ["ielts", "toefl", "cet6", "kaoyan"], "ja": [] }
+    "requires": [
+      "tokenize",
+      "syntax",
+      "errorTaxonomy",
+      "levelScale"
+    ],
+    "exams": {
+      "en": [
+        "ielts",
+        "toefl",
+        "cet6",
+        "kaoyan"
+      ],
+      "ja": [],
+      "ko": [
+        "topik"
+      ]
+    }
   },
   "helpDefault": "L1",
   "presenter": "diff-pane"
